@@ -7,14 +7,14 @@ import { $, $$, esc, toast, ICONS, ROLE, thDateY, busy, field } from './ui.js';
 import * as docs from './docs.js';
 
 const PAGES = {
-  dashboard: { title: 'แดชบอร์ด', load: () => import('./pages/dashboard.js') },
-  warehouse: { title: 'คลังสินค้า', load: () => import('./pages/warehouse.js') },
-  branches: { title: 'สาขาและส่งต่องาน', load: () => import('./pages/branches.js') },
-  sales: { title: 'การขายและบิล', load: () => import('./pages/sales.js') },
-  suppliers: { title: 'จัดซื้อ / สวน', load: () => import('./pages/suppliers.js') },
-  reports: { title: 'รายงาน', load: () => import('./pages/reports.js') },
-  settings: { title: 'ตั้งค่า', load: () => import('./pages/settings.js') },
-  alerts: { title: 'แจ้งเตือนและงานรอตรวจ', load: () => import('./pages/alerts.js') },
+  dashboard: { title: 'แดชบอร์ด', load: () => import('./dashboard.js') },
+  warehouse: { title: 'คลังสินค้า', load: () => import('./warehouse.js') },
+  branches: { title: 'สาขาและส่งต่องาน', load: () => import('./branches.js') },
+  sales: { title: 'การขายและบิล', load: () => import('./sales.js') },
+  suppliers: { title: 'จัดซื้อ / สวน', load: () => import('./suppliers.js') },
+  reports: { title: 'รายงาน', load: () => import('./reports.js') },
+  settings: { title: 'ตั้งค่า', load: () => import('./settings.js') },
+  alerts: { title: 'แจ้งเตือนและงานรอตรวจ', load: () => import('./alerts.js') },
 };
 
 const ctx = { api: null, me: null, master: null, page: null, params: [] };

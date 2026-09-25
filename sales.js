@@ -1,6 +1,6 @@
-import { $, $$, esc, fmtN, fmtKg, fmtMoney, thDate, thDateY, statusBadge, CHANNEL, table, daysAgoISO, todayISO } from '../ui.js';
-import { lotTrace, dispatchView, onChange } from '../docs.js';
-import { invoiceForm, invoiceView, quoteForm, quoteView, customerForm, customerView } from '../salesdocs.js';
+import { $, $$, esc, fmtN, fmtKg, fmtMoney, thDate, thDateY, statusBadge, CHANNEL, table, daysAgoISO, todayISO } from './ui.js';
+import { lotTrace, dispatchView, onChange } from './docs.js';
+import { invoiceForm, invoiceView, quoteForm, quoteView, customerForm, customerView } from './salesdocs.js';
 
 const TABS = [['invoices', 'บิล'], ['billable', 'รอออกบิล'], ['quotes', 'ใบเสนอราคา'], ['customers', 'ลูกค้า']];
 const st = { from: daysAgoISO(30), to: todayISO(), q: '', sel: null };

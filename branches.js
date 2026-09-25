@@ -1,5 +1,5 @@
-import { $, $$, esc, fmtN, thDate, thDateTime, ripBadge, statusBadge, RIP, RIP_ORDER, ZONE, table, opt } from '../ui.js';
-import { lotTrace, dispatchForm, dispatchView, ripenessModal, zoneTransferModal, freezeModal, adjustModal, approvalsModal, onChange } from '../docs.js';
+import { $, $$, esc, fmtN, thDate, thDateTime, ripBadge, statusBadge, RIP, RIP_ORDER, ZONE, table, opt } from './ui.js';
+import { lotTrace, dispatchForm, dispatchView, ripenessModal, zoneTransferModal, freezeModal, adjustModal, approvalsModal, onChange } from './docs.js';
 
 let current = null;
 

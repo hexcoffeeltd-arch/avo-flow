@@ -1,5 +1,5 @@
-import { $, $$, esc, fmtN, fmtKg, thDate, thDateTime, thTime, ripBadge, statusBadge, RIP, RIP_ORDER, ZONE, MTYPE, CHANNEL, table, opt, exportExcel, daysAgoISO, todayISO } from '../ui.js';
-import { lotTrace, askLot, receiptForm, receiptView, dispatchForm, dispatchView, ripenessModal, adjustModal, caseResolve, onChange } from '../docs.js';
+import { $, $$, esc, fmtN, fmtKg, thDate, thDateTime, thTime, ripBadge, statusBadge, RIP, RIP_ORDER, ZONE, MTYPE, CHANNEL, table, opt, exportExcel, daysAgoISO, todayISO } from './ui.js';
+import { lotTrace, askLot, receiptForm, receiptView, dispatchForm, dispatchView, ripenessModal, adjustModal, caseResolve, onChange } from './docs.js';
 
 const TABS = [['stock', 'คงคลัง'], ['receipts', 'รับเข้า'], ['dispatch', 'ตีออก / โอน'], ['ripeness', 'ติดตามความสุก'], ['history', 'ประวัติเคลื่อนไหว']];
 const state = { q: '', f: {}, showFilter: false, sort: 'rip', rstatus: '', dstatus: '', hfrom: daysAgoISO(7), hto: todayISO(), htype: '', hq: '' };

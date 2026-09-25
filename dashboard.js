@@ -1,5 +1,5 @@
-import { $, $$, esc, fmtN, fmtMoney, thDate, ripBadge, RIP, RIP_ORDER, RIP_COLOR, ZONE, table } from '../ui.js';
-import { lotTrace, receiptForm, approvalsModal, onChange } from '../docs.js';
+import { $, $$, esc, fmtN, fmtMoney, thDate, ripBadge, RIP, RIP_ORDER, RIP_COLOR, ZONE, table } from './ui.js';
+import { lotTrace, receiptForm, approvalsModal, onChange } from './docs.js';
 
 const watchStatus = (w) => {
   if (w.ripeness === 'overripe') return '<span class="badge b-danger">สุกมาก เร่งระบาย</span>';

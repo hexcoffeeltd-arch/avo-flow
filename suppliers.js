@@ -1,5 +1,5 @@
-import { $, $$, esc, fmtN, fmtMoney, thDate, statusBadge, table, openModal } from '../ui.js';
-import { supplierForm, receiptView, receiptForm, onChange } from '../docs.js';
+import { $, $$, esc, fmtN, fmtMoney, thDate, statusBadge, table, openModal } from './ui.js';
+import { supplierForm, receiptView, receiptForm, onChange } from './docs.js';
 
 export async function render(el, ctx) {
   onChange(ctx, () => ctx.page === 'suppliers' && render(el, ctx));

@@ -1,4 +1,4 @@
-import { $, $$, esc, fmtN, fmtMoney, thDateTime, ROLE, CHANNEL, table, opt, field, formData, openModal, busy, toast } from '../ui.js';
+import { $, $$, esc, fmtN, fmtMoney, thDateTime, ROLE, CHANNEL, table, opt, field, formData, openModal, busy, toast } from './ui.js';
 
 export async function render(el, ctx, params) {
   const c = ctx.can;

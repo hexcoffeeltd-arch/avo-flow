@@ -1,5 +1,5 @@
-import { $$, esc, table } from '../ui.js';
-import { lotTrace, dispatchView, receiptView, approvalsModal, onChange } from '../docs.js';
+import { $$, esc, table } from './ui.js';
+import { lotTrace, dispatchView, receiptView, approvalsModal, onChange } from './docs.js';
 
 const LV = { danger: ['b-danger', 'ด่วน'], warn: ['b-warn', 'ควรจัดการ'], info: ['b-info', 'ติดตาม'] };
 

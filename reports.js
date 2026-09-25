@@ -1,4 +1,4 @@
-import { $, $$, esc, fmtN, fmtMoney, thDate, thDateTime, table, exportExcel, daysAgoISO, todayISO, CHANNEL } from '../ui.js';
+import { $, $$, esc, fmtN, fmtMoney, thDate, thDateTime, table, exportExcel, daysAgoISO, todayISO, CHANNEL } from './ui.js';
 
 const KINDS = [
   ['stock', 'สต็อกคงคลัง', 'ยอดปัจจุบันทุกสถานที่ (ไม่ใช้ช่วงวันที่)'],
