@@ -353,3 +353,40 @@ textarea.input { height: auto; min-height: 72px; padding: 10px 12px; resize: ver
   .filters { grid-template-columns: minmax(0, 1fr); }
   .role-grid { grid-template-columns: minmax(0, 1fr); }
 }
+
+/* ---------- รุ่น 2 ---------- */
+.nav-badge { margin-left: auto; min-width: 20px; height: 20px; padding: 0 6px; border-radius: 10px; background: var(--primary-soft); color: var(--primary); font-size: 11px; font-weight: 700; display: inline-grid; place-items: center; }
+.nav-badge.danger { background: var(--danger-bg); color: var(--danger-ink); }
+.pill.warn { background: var(--warn-bg); color: var(--warn-ink); border: 0; cursor: pointer; font-family: inherit; }
+.pill.danger { background: var(--danger-bg); color: var(--danger-ink); }
+.kpi.click, .card.click { cursor: pointer; }
+.kpi.click:hover { border-color: var(--line-strong); }
+.tbl tr.row-danger td { background: color-mix(in srgb, var(--danger-bg) 55%, transparent); }
+.label-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 10px; }
+.lot-label { display: flex; gap: 12px; align-items: center; border: 2px solid #1f5a49; border-radius: 10px; padding: 12px; break-inside: avoid; background: #fff; color: #1c2a24; }
+.lot-label-qr { flex: none; line-height: 0; }
+.scan-video { width: 100%; max-height: 300px; border-radius: 10px; background: #000; margin-top: 10px; object-fit: cover; }
+.check-grid { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 6px 14px; }
+.line-preview { white-space: pre-wrap; background: var(--surface-2); border: 1px solid var(--line); border-radius: 10px; padding: 12px; font-size: 12.5px; font-family: inherit; max-height: 320px; overflow: auto; }
+.sign-row { display: flex; justify-content: space-between; gap: 24px; margin-top: 36px; font-size: 12.5px; }
+.sign-grid { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 18px; margin-top: 36px; text-align: center; }
+.sign-line { border-bottom: 1px dotted var(--text-2); height: 40px; margin-bottom: 6px; }
+.flow { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 10px; }
+.flow-step { display: flex; gap: 10px; align-items: flex-start; background: var(--surface-2); border: 1px solid var(--line); border-radius: 12px; padding: 12px; }
+.flow-step .n { flex: none; width: 26px; height: 26px; border-radius: 50%; background: var(--primary); color: var(--primary-ink); display: grid; place-items: center; font-size: 13px; font-weight: 700; }
+.guide { margin: 0; padding-left: 20px; display: grid; gap: 6px; font-size: 13.5px; }
+.faq { border-top: 1px solid var(--line); padding: 10px 0; }
+.faq summary { cursor: pointer; font-weight: 600; font-size: 13.5px; }
+.faq div { margin-top: 6px; color: var(--text-2); }
+.tbl.uat td { white-space: normal; vertical-align: top; }
+.tbl.uat td.chk { text-align: center; }
+.tbl.uat input[type=checkbox] { width: 18px; height: 18px; accent-color: var(--primary); }
+@media (max-width: 860px) {
+  .topbar .pill.warn, .topbar .pill.danger { display: inline-flex; }
+  .label-grid, .check-grid, .flow, .sign-grid { grid-template-columns: minmax(0, 1fr); }
+}
+@media print {
+  .label-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .sign-grid { grid-template-columns: repeat(4, minmax(0, 1fr)); }
+  .tbl.uat input.cell { border: 0; }
+}

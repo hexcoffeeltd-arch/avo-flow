@@ -4,6 +4,7 @@
 // backend:
 //   'demo'  = ทดลองใช้ในเบราว์เซอร์ ข้อมูลจำลอง ไม่ต้องมีฐานข้อมูล
 //   'neon'  = ใช้งานจริง ต่อฐานข้อมูล Neon (Data API + Neon Auth)
+//   'supabase' = ใช้ Supabase แทน Neon (ดู docs/SUPABASE.md)
 //   'local' = สำหรับนักพัฒนาทดสอบกับ PostgreSQL ในเครื่อง (tools/dev_server.py)
 // =====================================================================
 export const CONFIG = {
@@ -19,6 +20,9 @@ export const CONFIG = {
     // อนุญาตให้สมัครสมาชิกเองจากหน้าเข้าสู่ระบบ (บัญชีใหม่ต้องรอ Admin กำหนดสิทธิ์ก่อนใช้งาน)
     allowSignup: true,
   },
+
+  // ใช้เมื่อ backend: 'supabase' — Project Settings → API (ค่า anon/publishable key เปิดเผยได้)
+  supabase: { url: '', anonKey: '', allowSignup: true },
 
   local: { baseUrl: '' },
 

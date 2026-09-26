@@ -1,5 +1,5 @@
 import { $, $$, esc, fmtN, thDate, thDateTime, ripBadge, statusBadge, RIP, RIP_ORDER, ZONE, table, opt } from './ui.js';
-import { lotTrace, dispatchForm, dispatchView, ripenessModal, zoneTransferModal, freezeModal, adjustModal, approvalsModal, onChange } from './docs.js';
+import { lotTrace, dispatchForm, dispatchView, ripenessModal, reweighModal, zoneTransferModal, freezeModal, adjustModal, approvalsModal, stocktakeStart, stocktakeView, onChange } from './docs.js';
 
 let current = null;
 
@@ -12,6 +12,7 @@ export async function render(el, ctx, params) {
   const b = await ctx.api.rpc('api_branch_stock', { site_id: current });
   const outgoing = (await ctx.api.rpc('api_dispatches', { site_id: current, status: 'draft,shipped,partial' })).filter((d) => d.from_site_id === current);
   const stock = await ctx.api.rpc('api_stock', { site_id: current });
+  const openSt = (await ctx.api.rpc('api_stocktakes', { site_id: current, status: 'draft,submitted' }).catch(() => []))[0];
   const act = ctx.can.actAt(current); const approver = ctx.can.approveAt(current);
   const whs = ctx.master.sites.filter((s) => s.kind === 'warehouse' && ctx.can.actAt(s.id));
   const z = (k) => b.zones[k] || [];
@@ -28,6 +29,7 @@ export async function render(el, ctx, params) {
     ${act ? `<div class="toolbar">
       <button class="btn sm" data-op="zone">ย้ายหลังร้าน → หน้าร้าน</button><button class="btn sm" data-op="rip">ตรวจความสุก</button><button class="btn sm" data-op="freeze">แปรรูปแช่แข็ง</button>
       <button class="btn sm" data-op="retail_sale">ขายหน้าร้าน</button><button class="btn sm" data-op="internal_use">นำไปใช้</button><button class="btn sm" data-op="waste">ตัดทิ้ง</button><button class="btn sm" data-op="count_adjust">ปรับยอดนับจริง</button>
+      <button class="btn sm" data-op="reweigh">ชั่งซ้ำ</button><button class="btn sm ${openSt ? 'primary' : ''}" data-op="stocktake">${openSt ? 'ใบตรวจนับ ' + esc(openSt.doc_no) : 'ตรวจนับทั้งสาขา'}</button>
       <button class="btn sm ${b.pending_adjustments ? 'primary' : ''}" data-op="approve">รออนุมัติ ${b.pending_adjustments}</button></div>` : ''}
     <div class="row-3">${zoneCard('front', 'หน้าร้าน')}${zoneCard('back', 'หลังร้าน')}
       <div class="card"><div class="card-title" style="margin-bottom:8px">แช่แข็ง</div>
@@ -49,8 +51,8 @@ export async function render(el, ctx, params) {
         { label: 'จุด', render: (r) => ZONE[r.zone] }, { label: 'Lot', render: (r) => `<span class="lot">${esc(r.lot_code)}</span>` },
         { label: 'สินค้า', render: (r) => `${esc(r.variety || '-')} · ${esc(r.size || '-')}` }, { label: 'ความสุก', render: (r) => ripBadge(r.ripeness) },
         { label: 'รับเข้า', render: (r) => `${thDate(r.received_at)} <span class="small muted">(${r.age_days} วัน)</span>` },
-        { label: 'คงเหลือ', right: true, render: (r) => `<b>${fmtN(r.kg)} กก.</b><div class="small muted">${r.bags ? fmtN(r.bags) + ' ถุง' : fmtN(r.baskets) + ' ตะกร้า'}</div>` },
-        { label: '', render: (r) => (act ? `<span class="actions" style="justify-content:flex-end">${r.product === 'fresh' ? `<button class="btn sm" data-q="rip" data-k="${r.lot_id}|${r.ripeness}|${r.zone}">ความสุก</button>` : ''}<button class="btn sm" data-q="waste" data-k="${r.lot_id}|${r.ripeness}|${r.zone}">ตัดทิ้ง</button></span>` : '') },
+        { label: 'คงเหลือ', right: true, render: (r) => `<b>${fmtN(r.kg)} กก.</b><div class="small muted">${r.bags ? fmtN(r.bags) + ' ถุง' : fmtN(r.baskets) + ' ตะกร้า'}${r.est_pieces ? ' · ≈' + fmtN(r.est_pieces) + ' ลูก' : ''}</div>` },
+        { label: '', render: (r) => (act ? `<span class="actions" style="justify-content:flex-end">${r.product === 'fresh' ? `<button class="btn sm" data-q="rip" data-k="${r.lot_id}|${r.ripeness}|${r.zone}">ความสุก</button><button class="btn sm" data-q="rw" data-k="${r.lot_id}|${r.ripeness}|${r.zone}">ชั่งซ้ำ</button>` : ''}<button class="btn sm" data-q="waste" data-k="${r.lot_id}|${r.ripeness}|${r.zone}">ตัดทิ้ง</button></span>` : '') },
       ], stock.sort((a, c) => a.zone.localeCompare(c.zone) || c.rip_rank - a.rip_rank), { rowAttr: (r) => `class="click" data-lot="${r.lot_id}"`, empty: 'ยังไม่มีสต็อกที่สาขานี้' })}</div>
     ${b.recent.length ? `<div class="card"><div class="card-title" style="margin-bottom:10px">รับล่าสุด</div>${table([{ label: 'ใบโอน', key: 'doc_no' }, { label: 'ต้นทาง', key: 'from_site' }, { label: 'รับเมื่อ', render: (d) => thDateTime(d.received_at) }, { label: 'ส่ง / รับ', right: true, render: (d) => `${fmtN(d.total_kg)} / ${fmtN(d.total_received_kg)} กก.` }, { label: 'ผู้รับ', key: 'receiver_name' }, { label: '', right: true, render: (d) => statusBadge('dispatch', d.status) }], b.recent, { rowAttr: (d) => `class="click" data-d="${d.id}"` })}</div>` : ''}
     <div class="foot-note"><b>กฎสต็อก</b> คลัง → ระหว่างทาง → สาขา · ไม่นับยอดซ้ำ · ตัดทิ้งและปรับยอดต้องให้ผู้จัดการสาขาอนุมัติ</div>`;
@@ -66,8 +68,12 @@ export async function render(el, ctx, params) {
     else if (op === 'rip') ripenessModal(ctx, { site_id: current, zone: 'back' });
     else if (op === 'freeze') freezeModal(ctx, current);
     else if (op === 'approve') approvalsModal(ctx, current);
+    else if (op === 'reweigh') reweighModal(ctx, { site_id: current, zone: 'back' });
+    else if (op === 'stocktake') { if (openSt) stocktakeView(ctx, openSt.id); else stocktakeStart(ctx, current); }
     else adjustModal(ctx, current, op);
   }));
   $$('[data-q]', el).forEach((btn) => (btn.onclick = () => { const [lot_id, ripeness, zone] = btn.dataset.k.split('|');
-    if (btn.dataset.q === 'rip') ripenessModal(ctx, { site_id: current, zone, preset: { lot_id, ripeness } }); else adjustModal(ctx, current, 'waste', { lot_id, ripeness, zone }); }));
+    if (btn.dataset.q === 'rip') ripenessModal(ctx, { site_id: current, zone, preset: { lot_id, ripeness } });
+    else if (btn.dataset.q === 'rw') reweighModal(ctx, { site_id: current, zone, preset: { lot_id, ripeness } });
+    else adjustModal(ctx, current, 'waste', { lot_id, ripeness, zone }); }));
 }

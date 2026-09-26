@@ -24,7 +24,8 @@ async function view(ctx, id) {
   const m = openModal({ title: esc(s.name), sub: `${esc(s.contact || '')} ${esc(s.phone || '')} · ${esc(s.province || '')}`, size: 'lg',
     body: `<div class="stat-mini" style="grid-template-columns:repeat(4,minmax(0,1fr));margin-bottom:14px">
       <div><div class="l">รับเข้ารวม</div><div class="v num">${fmtN(s.received_kg)} กก.</div></div><div><div class="l">คัดออกตอนรับ</div><div class="v num">${fmtN(s.rejected_kg)} กก.</div></div>
-      <div><div class="l">เน่าเสีย/สูญหายภายหลัง</div><div class="v num">${fmtN(s.waste_kg)} กก.</div></div><div><div class="l">อัตราเสีย</div><div class="v num">${fmtN(s.waste_rate)}%</div></div></div>
+      <div><div class="l">เน่าเสีย/สูญหาย/เคลม</div><div class="v num">${fmtN(s.waste_kg)} กก.</div></div><div><div class="l">อัตราเสีย</div><div class="v num">${fmtN(s.waste_rate)}%</div></div></div>
+      ${Number(s.shrink_kg) ? `<div class="small muted" style="margin:-6px 0 12px">น้ำหนักหายระหว่างบ่ม (ชั่งซ้ำ) ${fmtN(s.shrink_kg)} กก. — ไม่นับรวมในอัตราเสีย</div>` : ''}
       ${table([{ label: 'วันที่', render: (h) => thDate(h.received_at) }, { label: 'เลขที่', key: 'doc_no' }, { label: 'Lot', render: (h) => `<span class="lot">${esc(h.lot)}</span>` },
         { label: 'สินค้า', render: (h) => `${esc(h.variety)} · ${esc(h.size)}` }, { label: 'ตะกร้า', right: true, render: (h) => fmtN(h.baskets) }, { label: 'สุทธิ', right: true, render: (h) => fmtN(h.net_kg) },
         { label: 'คัดออก', right: true, render: (h) => fmtN(h.rejected_kg) }, { label: 'ราคา', right: true, render: (h) => fmtMoney(h.unit_cost) }, { label: '', right: true, render: (h) => statusBadge('receipt', h.status) }],

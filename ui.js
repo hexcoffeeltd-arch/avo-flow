@@ -10,6 +10,9 @@ const mf = new Intl.NumberFormat('th-TH', { minimumFractionDigits: 2, maximumFra
 export const fmtN = (n) => (n == null || n === '' ? '—' : nf.format(Number(n)));
 export const fmtKg = (n) => (n == null ? '—' : nf.format(Number(n)) + ' กก.');
 export const fmtMoney = (n) => (n == null ? '—' : mf.format(Number(n)));
+// จำนวนลูกโดยประมาณจากน้ำหนักเฉลี่ย/ลูก (กรัม)
+export const pcs = (kg, avg_g) => (avg_g > 0 && kg != null ? Math.round((Number(kg) * 1000) / Number(avg_g)) : null);
+export const fmtPcs = (kg, avg_g) => { const n = pcs(kg, avg_g); return n == null ? '' : `≈ ${nf.format(n)} ลูก`; };
 const TZ = { timeZone: 'Asia/Bangkok' };
 export const thDate = (iso) => { if (!iso) return '—'; const d = new Date(iso.length === 10 ? iso + 'T00:00:00+07:00' : iso); return d.toLocaleDateString('th-TH', { ...TZ, day: 'numeric', month: 'short' }); };
 export const thDateY = (iso) => { if (!iso) return '—'; const d = new Date(iso.length === 10 ? iso + 'T00:00:00+07:00' : iso); return d.toLocaleDateString('th-TH', { ...TZ, day: 'numeric', month: 'short', year: 'numeric' }); };
@@ -35,14 +38,19 @@ export const STATUS = {
   adjust: { pending: ['รออนุมัติ', 'b-warn'], applied: ['บันทึกแล้ว', 'b-ok'], rejected: ['ไม่อนุมัติ', 'b-gray'] },
   invoice: { issued: ['ออกแล้ว', 'b-ok'], cancelled: ['ยกเลิก', 'b-gray'] },
   quote: { draft: ['ฉบับร่าง', 'b-gray'], sent: ['ส่งลูกค้าแล้ว', 'b-info'], accepted: ['ลูกค้าตกลง', 'b-ok'], cancelled: ['ยกเลิก', 'b-gray'] },
+  return: { pending: ['รออนุมัติ', 'b-warn'], applied: ['อนุมัติแล้ว', 'b-ok'], rejected: ['ไม่อนุมัติ', 'b-gray'], cancelled: ['ยกเลิก', 'b-gray'] },
+  credit: { issued: ['ออกแล้ว', 'b-ok'], cancelled: ['ยกเลิก', 'b-gray'] },
+  stocktake: { draft: ['กำลังนับ', 'b-info'], submitted: ['รออนุมัติ', 'b-warn'], approved: ['อนุมัติ · ปรับยอดแล้ว', 'b-ok'], rejected: ['ไม่อนุมัติ', 'b-gray'], cancelled: ['ยกเลิก', 'b-gray'] },
 };
+export const DOC_TYPE = { invoice: ['ใบส่งของ / ใบแจ้งหนี้', 'INV'], tax_invoice: ['ใบกำกับภาษีเต็มรูป', 'TIV'], cash: ['บิลเงินสด', 'CS'] };
 export const statusBadge = (kind, s, extra = '') => { const [t, c] = STATUS[kind]?.[s] || [s, 'b-gray']; return `<span class="badge ${c}">${esc(t)}${extra}</span>`; };
-export const ADJ_KIND = { retail_sale: 'ขายหน้าร้าน', internal_use: 'นำไปใช้', waste: 'ตัดทิ้ง', count_adjust: 'ปรับยอดนับจริง' };
+export const ADJ_KIND = { retail_sale: 'ขายหน้าร้าน', internal_use: 'นำไปใช้', waste: 'ตัดทิ้ง', count_adjust: 'ปรับยอดนับจริง', shrinkage: 'น้ำหนักหาย (ชั่งซ้ำ)' };
 export const MTYPE = {
   RECEIVE: 'รับเข้า', RECEIVE_REVERSE: 'กลับรายการรับเข้า', SHIP_OUT: 'ตีออก', TRANSIT_IN: 'เข้าระหว่างทาง', TRANSIT_OUT: 'ออกจากระหว่างทาง', TRANSFER_IN: 'รับโอนเข้า',
   DELIVERED: 'ส่งมอบลูกค้า', RIPEN_OUT: 'เปลี่ยนความสุก (ออก)', RIPEN_IN: 'เปลี่ยนความสุก (เข้า)', ZONE_OUT: 'โอนภายใน (ออก)', ZONE_IN: 'โอนภายใน (เข้า)',
   FREEZE_CONSUME: 'ใช้ทำแช่แข็ง', FREEZE_PRODUCE: 'ผลผลิตแช่แข็ง', RETAIL_SALE: 'ขายหน้าร้าน', INTERNAL_USE: 'นำไปใช้', WASTE: 'ตัดทิ้ง', ADJUST: 'ปรับยอด',
   CASE_LOSS: 'สูญเสียระหว่างขนส่ง', CASE_RETURN: 'ส่งคืน (ออกจากระหว่างทาง)', RETURN_IN: 'รับคืนเข้าต้นทาง',
+  SHRINK: 'น้ำหนักหายระหว่างบ่ม', COUNT_ADJUST: 'ปรับยอดจากตรวจนับ', CUST_RETURN: 'ลูกค้าคืนเข้าสต็อก',
 };
 
 // ---------- toast ----------
@@ -126,7 +134,8 @@ export function table(cols, rows, { empty = 'ยังไม่มีข้อ�
 }
 
 // ---------- รูปถ่ายหลักฐาน (ย่อก่อนอัปโหลด) ----------
-export function compressImage(file, max = 1280, quality = 0.72) {
+// ย่อเหลือด้านยาว 800px (~80 KB/รูป) เพื่อประหยัดพื้นที่ฐานข้อมูล
+export function compressImage(file, max = 800, quality = 0.7) {
   return new Promise((resolve, reject) => {
     const img = new Image(); const url = URL.createObjectURL(file);
     img.onload = () => {
@@ -148,16 +157,23 @@ export function bindPhotoFields(root, api) {
     inp.onchange = async () => {
       const f = inp.files[0]; if (!f) return;
       const st = $('[data-st]', w); st.textContent = 'กำลังอัปโหลด…';
+      let data;
       try {
-        const data = await compressImage(f);
+        data = await compressImage(f);
         const r = await api.rpc('api_attachment_save', { data });
         $('input[type=hidden]', w).value = r.ref; const im = $('img', w); im.src = data; im.classList.remove('hidden'); st.textContent = 'แนบแล้ว';
-      } catch (e) { st.textContent = ''; toast(e.message, 'err'); }
+      } catch (e) {
+        if (data && api.isNetworkError?.(e)) {
+          // สัญญาณหลุด: เก็บรูปไว้ในเครื่อง ระบบจะอัปโหลดให้ตอนส่งรายการ
+          $('input[type=hidden]', w).value = 'local:' + data; const im = $('img', w); im.src = data; im.classList.remove('hidden'); st.textContent = 'เก็บไว้ในเครื่อง (ออฟไลน์)';
+        } else { st.textContent = ''; toast(e.message, 'err'); }
+      }
     };
   });
 }
 export async function showEvidence(el, ref, api) {
   if (!ref) { el.innerHTML = '<span class="muted small">ไม่มีรูปแนบ</span>'; return; }
+  if (ref.startsWith('local:')) { el.innerHTML = `<img class="evidence-img" src="${esc(ref.slice(6))}" alt="หลักฐาน">`; return; }
   try { const r = await api.rpc('api_attachment_get', { ref }); el.innerHTML = r?.data ? `<img class="evidence-img" src="${esc(r.data)}" alt="หลักฐาน">` : '<span class="muted small">ไม่พบรูป</span>';
     const im = $('img', el); if (im) im.onclick = () => openModal({ title: 'รูปหลักฐาน', size: 'lg', body: `<img src="${esc(r.data)}" style="width:100%;border-radius:10px" alt="">` });
   } catch (e) { el.innerHTML = '<span class="muted small">โหลดรูปไม่ได้</span>'; }
@@ -182,6 +198,10 @@ export async function exportExcel(filename, columns, rows) {
   }
 }
 
+// ---------- แบ่งหน้า: ปุ่ม "แสดงเพิ่ม" ----------
+export const PAGE = 100;
+export const moreBtn = (len, size = PAGE) => (len > 0 && len % size === 0 ? `<div class="actions" style="justify-content:center;margin-top:10px"><button class="btn sm" data-more>แสดงเพิ่ม</button></div>` : '');
+
 export const ICONS = {
   dash: '<svg viewBox="0 0 24 24" fill="none" stroke-width="1.7"><rect x="3" y="3" width="7" height="7" rx="1.5"/><rect x="14" y="3" width="7" height="7" rx="1.5"/><rect x="3" y="14" width="7" height="7" rx="1.5"/><rect x="14" y="14" width="7" height="7" rx="1.5"/></svg>',
   stock: '<svg viewBox="0 0 24 24" fill="none" stroke-width="1.7"><circle cx="8" cy="15" r="4"/><circle cx="16" cy="15" r="4"/><circle cx="12" cy="8" r="4"/></svg>',
@@ -193,4 +213,7 @@ export const ICONS = {
   bell: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M6 8a6 6 0 1 1 12 0c0 7 3 8 3 8H3s3-1 3-8"/><path d="M10 20a2 2 0 0 0 4 0"/></svg>',
   menu: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M4 7h16M4 12h16M4 17h16"/></svg>',
   alert: '<svg viewBox="0 0 24 24" fill="none" stroke-width="1.7"><path d="M12 3l9 16H3z"/><path d="M12 10v4M12 17v.5"/></svg>',
+  tasks: '<svg viewBox="0 0 24 24" fill="none" stroke-width="1.7"><rect x="4" y="3" width="16" height="18" rx="2"/><path d="M8 8l1.5 1.5L12 7M8 14l1.5 1.5L12 13M14 8h3M14 14h3"/></svg>',
+  help: '<svg viewBox="0 0 24 24" fill="none" stroke-width="1.7"><circle cx="12" cy="12" r="9"/><path d="M9.5 9.5a2.5 2.5 0 1 1 3.5 2.3c-.6.3-1 .9-1 1.6V14M12 17v.5"/></svg>',
+  qr: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7"><rect x="3" y="3" width="7" height="7" rx="1"/><rect x="14" y="3" width="7" height="7" rx="1"/><rect x="3" y="14" width="7" height="7" rx="1"/><path d="M14 14h3v3M21 14v7h-7M17 21v-2"/></svg>',
 };

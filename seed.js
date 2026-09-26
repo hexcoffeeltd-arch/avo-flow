@@ -43,7 +43,7 @@ export async function seedDemo(call) {
     const row = users.find((x) => x.email === u.sub + '@demo.local' || x.display_name === u.name);
     await call(A, 'api_user_save', { id: row.id, role: u.role, site_id: u.site ? siteId[u.site] : null, is_manager: !!u.manager, display_name: u.name });
   }
-  await call(A, 'api_settings_save', { key: 'company', value: { name: 'บริษัท ตัวอย่าง อะโวคาโด จำกัด', address: '99 หมู่ 1 ต.ตัวอย่าง อ.เมือง จ.น่าน 55000', tax_id: '0-0000-00000-00-0', phone: '054-000-000' } });
+  await call(A, 'api_settings_save', { key: 'company', value: { name: 'บริษัท ตัวอย่าง อะโวคาโด จำกัด', address: '99 หมู่ 1 ต.ตัวอย่าง อ.เมือง จ.น่าน 55000', tax_id: '0-5555-60000-00-1', phone: '054-000-000', branch: 'สำนักงานใหญ่' } });
 
   const WH = 'demo-wh', WHM = 'demo-whm', BR = 'demo-br', BRM = 'demo-brm', SALES = 'demo-sales', EX = 'demo-exec';
   const sup = {};
@@ -73,13 +73,13 @@ export async function seedDemo(call) {
     if (confirm) r = await call(WH, 'api_receipt_confirm', { id: r.id, lines: rejected ? r.lines.map((l, i) => ({ id: l.id, rejected_kg: rejected[i] || 0 })) : [] });
     return r;
   };
-  const r1 = await receipt(WH, sup.noi, daysAgo(8, 7, 40), [{ variety_id: V.HASS, size_id: S['220'], ripeness: 'raw', baskets: 12, gross_kg: 252, tare_kg: 12, unit_cost: 42 }]);
+  const r1 = await receipt(WH, sup.noi, daysAgo(8, 7, 40), [{ variety_id: V.HASS, size_id: S['220'], ripeness: 'raw', baskets: 12, gross_kg: 252, tare_kg: 12, pieces: 1000, unit_cost: 42 }]);
   const r2 = await receipt(WH, sup.cm, daysAgo(6, 9, 10), [{ variety_id: V.BUCC, size_id: S.M, ripeness: 'raw', baskets: 10, gross_kg: 205, tare_kg: 10, unit_cost: 28 }]);
   const r3 = await receipt(WH, sup.hill, daysAgo(3, 8, 5), [
     { variety_id: V.HASS, size_id: S['180'], ripeness: 'raw', baskets: 18, gross_kg: 372, tare_kg: 18, unit_cost: 38 },
     { variety_id: V.HASS, size_id: S.M, ripeness: 'raw', baskets: 6, gross_kg: 118, tare_kg: 6, unit_cost: 34 }]);
   const r4 = await receipt(WH, sup.chai, daysAgo(1, 10, 20), [{ variety_id: V.BOOTH7, size_id: S.L, ripeness: 'breaking', baskets: 14, gross_kg: 290, tare_kg: 14, unit_cost: 25 }], true, [6]);
-  await receipt(WH, sup.noi, daysAgo(0, 7, 15), [{ variety_id: V.HASS, size_id: S['220'], ripeness: 'raw', baskets: 8, gross_kg: 168, tare_kg: 8, unit_cost: 42 }], false);
+  await receipt(WH, sup.noi, daysAgo(0, 7, 15), [{ variety_id: V.HASS, size_id: S['220'], ripeness: 'raw', baskets: 8, estimated: true, unit_cost: 42 }], false);
   const L1 = r1.lines[0].lot_id, L2 = r2.lines[0].lot_id, L3 = r3.lines[0].lot_id, L3b = r3.lines[1].lot_id, L4 = r4.lines[0].lot_id;
 
   // ตรวจความสุกในคลัง
@@ -122,9 +122,31 @@ export async function seedDemo(call) {
   await call(WH, 'api_dispatch_receive', { id: s2.id, receiver_name: 'ลูกค้าออนไลน์ 5 ราย', evidence: ev2 });
 
   // ใบตีออกร่าง (จองสต็อก) รอผู้จัดการยืนยัน
-  await call(WH, 'api_dispatch_save', { kind: 'sale', from_site_id: CW, customer_id: cust.dc, carrier: 'รถห้องเย็น DC', lines: [{ lot_id: L3, ripeness: 'raw', kg: 120, baskets: 6 }, { lot_id: L4, ripeness: 'breaking', kg: 60, baskets: 3 }] });
+  const dcDraft = await call(WH, 'api_dispatch_save', { kind: 'sale', from_site_id: CW, customer_id: cust.dc, carrier: 'รถห้องเย็น DC', lines: [{ lot_id: L3, ripeness: 'raw', kg: 120, baskets: 6 }, { lot_id: L4, ripeness: 'breaking', kg: 60, baskets: 3 }] });
 
   // ใบเสนอราคา
   await call(SALES, 'api_quote_save', { customer_id: cust.tiktok, valid_until: new Date(Date.now() + 7 * 86400e3).toISOString().slice(0, 10), status: 'sent',
     lines: [{ variety_id: V.HASS, size_id: S['220'], kg: 100, price: 70 }, { variety_id: V.BUCC, size_id: S.M, kg: 50, price: 45 }], note: 'ราคาส่งรายสัปดาห์' });
+
+  // ---------- รุ่น 2 ----------
+  // กรอบราคาที่อนุมัติล่วงหน้า + ใบกำกับภาษีเต็มรูป
+  await call(EX, 'api_price_save', { variety_id: V.HASS, size_id: S['180'], sell_price: 60, min_price: 57, max_price: 63 });
+  await call(SALES, 'api_invoice_create', { customer_id: cust.nww, doc_type: 'tax_invoice', vat_rate: 7, lines: [{ dispatch_line_id: s1.lines[1].id, kg: 20, price: 45 }] });
+  // ลูกค้าเคลมของที่ออกบิลแล้ว → อนุมัติ → ใบลดหนี้
+  const cev = (await call(SALES, 'api_attachment_save', { data: photo('ผลเนื้อดำที่ลูกค้าเคลม', '#8a4b35') })).ref;
+  const rt1 = await call(SALES, 'api_return_create', { dispatch_id: s1.id, reason: 'ลูกค้าแจ้งเนื้อดำ 3 กก.', evidence: cev, lines: [{ dispatch_line_id: s1.lines[0].id, kg: 3, disposition: 'discard' }] });
+  await call(EX, 'api_return_decide', { id: rt1.id, approve: true, note: 'ตรวจรูปแล้ว' });
+  const inv1 = (await call(SALES, 'api_invoices', { customer_id: cust.nww })).find((i) => i.doc_type === 'invoice');
+  const invFull = await call(SALES, 'api_invoice_get', { id: inv1.id });
+  await call(SALES, 'api_credit_note_create', { invoice_id: inv1.id, return_id: rt1.id, reason: 'ลูกค้าเคลมเนื้อดำ', lines: [{ invoice_line_id: invFull.lines[0].id, kg: 3 }] });
+  // ลูกค้าออนไลน์ขอคืน รอผู้จัดการอนุมัติ
+  await call(SALES, 'api_return_create', { dispatch_id: s2.id, reason: 'ลูกค้าได้ของเกิน ส่งคืน', evidence: cev, lines: [{ dispatch_line_id: s2.lines[0].id, kg: 2, disposition: 'restock', ripeness: 'breaking' }] });
+  // ชั่งซ้ำระหว่างบ่ม (หายเล็กน้อย บันทึกอัตโนมัติ)
+  const l3row = (await call(WH, 'api_stock', { site_id: CW })).find((r) => r.lot_id === L3 && r.ripeness === 'raw');
+  if (l3row) await call(WH, 'api_reweigh', { site_id: CW, zone: 'main', lot_id: L3, ripeness: 'raw', weighed_kg: Math.round((l3row.kg - 4) * 100) / 100, note: 'ชั่งซ้ำรอบเช้า' });
+  // สาขาเปิดใบตรวจนับ (ยังนับไม่ครบ)
+  await call(BR, 'api_stocktake_start', { site_id: NWW, note: 'นับสิ้นสัปดาห์' });
+  // ผู้บริหารมอบหมายงาน: ใบตีออก DC ให้ผู้จัดการคลังยืนยันภายใน 3 ชม.
+  const whmRow = (await call(A, 'api_users', {})).find((u) => u.display_name === 'สมศักดิ์ (ผจก.คลัง)');
+  await call(EX, 'api_assign', { entity: 'dispatch', id: dcDraft.id, assignee_id: whmRow.id, due_at: new Date(Date.now() + 3 * 3600e3).toISOString(), note: 'รถ DC มารับบ่ายนี้' });
 }

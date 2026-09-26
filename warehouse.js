@@ -1,7 +1,7 @@
-import { $, $$, esc, fmtN, fmtKg, thDate, thDateTime, thTime, ripBadge, statusBadge, RIP, RIP_ORDER, ZONE, MTYPE, CHANNEL, table, opt, exportExcel, daysAgoISO, todayISO } from './ui.js';
-import { lotTrace, askLot, receiptForm, receiptView, dispatchForm, dispatchView, ripenessModal, adjustModal, caseResolve, onChange } from './docs.js';
+import { $, $$, esc, fmtN, fmtKg, thDate, thDateTime, thTime, ripBadge, statusBadge, RIP, RIP_ORDER, ZONE, MTYPE, CHANNEL, table, opt, exportExcel, daysAgoISO, todayISO, PAGE, moreBtn } from './ui.js';
+import { lotTrace, askLot, receiptForm, receiptView, dispatchForm, dispatchView, ripenessModal, reweighModal, adjustModal, caseResolve, stocktakeStart, stocktakeView, onChange } from './docs.js';
 
-const TABS = [['stock', 'คงคลัง'], ['receipts', 'รับเข้า'], ['dispatch', 'ตีออก / โอน'], ['ripeness', 'ติดตามความสุก'], ['history', 'ประวัติเคลื่อนไหว']];
+const TABS = [['stock', 'คงคลัง'], ['receipts', 'รับเข้า'], ['dispatch', 'ตีออก / โอน'], ['ripeness', 'ติดตามความสุก'], ['stocktake', 'ตรวจนับ'], ['history', 'ประวัติเคลื่อนไหว']];
 const state = { q: '', f: {}, showFilter: false, sort: 'rip', rstatus: '', dstatus: '', hfrom: daysAgoISO(7), hto: todayISO(), htype: '', hq: '' };
 
 export async function render(el, ctx, params) {
@@ -19,6 +19,7 @@ export async function render(el, ctx, params) {
   if (tab === 'receipts') await receiptsTab(t, ctx);
   if (tab === 'dispatch') await dispatchTab(t, ctx);
   if (tab === 'ripeness') await ripenessTab(t, ctx);
+  if (tab === 'stocktake') await stocktakeTab(t, ctx);
   if (tab === 'history') await historyTab(t, ctx);
 }
 
@@ -62,8 +63,8 @@ async function stockTab(el, ctx) {
     { label: 'สวน', render: (r) => esc(r.supplier || '-') },
     { label: 'รับเข้า', render: (r) => `${thDate(r.received_at)}<div class="small muted">${r.age_days} วัน</div>` },
     { label: 'ที่เก็บ', render: (r) => `${esc(r.site)} · ${ZONE[r.zone]}` },
-    { label: 'คงเหลือ', right: true, render: (r) => `<b>${fmtN(r.kg)} กก.</b><div class="small muted">${r.bags ? fmtN(r.bags) + ' ถุง' : fmtN(r.baskets) + ' ตะกร้า'}${Number(r.reserved_kg) ? ' · จอง ' + fmtN(r.reserved_kg) : ''}</div>` },
-    { label: '', render: (r) => (ctx.can.actAt(r.site_id) && r.product === 'fresh' ? `<button class="btn sm" data-rip="${r.lot_id}|${r.ripeness}|${r.site_id}|${r.zone}">ตรวจความสุก</button>` : '') },
+    { label: 'คงเหลือ', right: true, render: (r) => `<b>${fmtN(r.kg)} กก.</b><div class="small muted">${r.bags ? fmtN(r.bags) + ' ถุง' : fmtN(r.baskets) + ' ตะกร้า'}${r.est_pieces ? ' · ≈' + fmtN(r.est_pieces) + ' ลูก' : ''}${Number(r.reserved_kg) ? ' · จอง ' + fmtN(r.reserved_kg) : ''}</div>` },
+    { label: '', render: (r) => (ctx.can.actAt(r.site_id) && r.product === 'fresh' ? `<span class="actions" style="justify-content:flex-end;flex-wrap:nowrap"><button class="btn sm" data-rip="${r.lot_id}|${r.ripeness}|${r.site_id}|${r.zone}">ตรวจความสุก</button><button class="btn sm" data-rw="${r.lot_id}|${r.ripeness}|${r.site_id}|${r.zone}">ชั่งซ้ำ</button></span>` : '') },
   ];
   const draw = () => {
     const r = filt();
@@ -71,6 +72,7 @@ async function stockTab(el, ctx) {
       foot: r.length ? `<tfoot><tr><td colspan="6">รวม ${r.length} รายการ</td><td class="right num">${fmtN(r.reduce((a, x) => a + Number(x.kg), 0))} กก.</td><td></td></tr></tfoot>` : '' });
     $$('[data-lot]', el).forEach((tr) => (tr.onclick = (e) => { if (e.target.closest('button')) return; lotTrace(ctx, Number(tr.dataset.lot)); }));
     $$('[data-rip]', el).forEach((b) => (b.onclick = () => { const [lot_id, ripeness, site_id, zone] = b.dataset.rip.split('|'); ripenessModal(ctx, { site_id: Number(site_id), zone, preset: { lot_id, ripeness } }); }));
+    $$('[data-rw]', el).forEach((b) => (b.onclick = () => { const [lot_id, ripeness, site_id, zone] = b.dataset.rw.split('|'); reweighModal(ctx, { site_id: Number(site_id), zone, preset: { lot_id, ripeness } }); }));
   };
   $('#q', el).oninput = (e) => { state.q = e.target.value; draw(); };
   $('#sort', el).onchange = (e) => { state.sort = e.target.value; draw(); };
@@ -79,15 +81,15 @@ async function stockTab(el, ctx) {
   $('#xl', el).onclick = () => exportExcel('สต็อกคงคลัง-' + todayISO(), [
     { key: 'lot_code', label: 'Lot' }, { key: 'variety', label: 'สายพันธุ์' }, { key: 'size', label: 'ไซส์' }, { key: 'rip', label: 'ความสุก' }, { key: 'supplier', label: 'สวน' },
     { key: 'received', label: 'วันที่รับเข้า' }, { key: 'age_days', label: 'อายุ (วัน)', type: 'num' }, { key: 'site', label: 'สถานที่' }, { key: 'zonel', label: 'จุดจัดเก็บ' },
-    { key: 'kg', label: 'คงเหลือ (กก.)', type: 'num' }, { key: 'baskets', label: 'ตะกร้า', type: 'num' }, { key: 'bags', label: 'ถุง', type: 'num' }, { key: 'reserved_kg', label: 'จอง (กก.)', type: 'num' },
+    { key: 'kg', label: 'คงเหลือ (กก.)', type: 'num' }, { key: 'baskets', label: 'ตะกร้า', type: 'num' }, { key: 'bags', label: 'ถุง', type: 'num' }, { key: 'est_pieces', label: 'จำนวนลูก (ประมาณ)', type: 'num' }, { key: 'reserved_kg', label: 'จอง (กก.)', type: 'num' },
     ...(ctx.can.seeWarehouse ? [{ key: 'value', label: 'มูลค่าทุน (บาท)', type: 'money' }] : [])],
     filt().map((r) => ({ ...r, rip: RIP[r.ripeness], received: r.received_at.slice(0, 10), zonel: ZONE[r.zone] })));
   draw();
 }
 
 // ---------------- รับเข้า ----------------
-async function receiptsTab(el, ctx) {
-  const rows = await ctx.api.rpc('api_receipts', { status: state.rstatus || null });
+async function receiptsTab(el, ctx, rows = null) {
+  rows = rows || await ctx.api.rpc('api_receipts', { status: state.rstatus || null, limit: PAGE });
   el.innerHTML = `<div class="seg" id="st">${[['', 'ทั้งหมด'], ['pending_check', 'รอตรวจรับ'], ['draft', 'ร่าง'], ['confirmed', 'ยืนยันแล้ว'], ['cancelled', 'ยกเลิก']].map(([k, v]) => `<button data-s="${k}" class="${state.rstatus === k ? 'active' : ''}">${v}</button>`).join('')}</div>
     <div class="card">${table([
       { label: 'เลขที่รับเข้า', render: (r) => `<b>${esc(r.doc_no)}</b>` },
@@ -97,20 +99,22 @@ async function receiptsTab(el, ctx) {
       { label: 'ตะกร้า', right: true, render: (r) => fmtN(r.total_baskets) },
       { label: 'ชั่งสุทธิ', right: true, render: (r) => fmtN(r.total_net) },
       { label: 'รับจริง', right: true, render: (r) => (r.status === 'confirmed' ? `<b>${fmtN(r.total_accepted)}</b>` : '—') },
-      { label: 'สถานะ', right: true, render: (r) => statusBadge('receipt', r.status) },
-    ], rows, { rowAttr: (r) => `class="click" data-id="${r.id}"`, empty: 'ไม่มีใบรับเข้า' })}</div>
+      { label: 'สถานะ', right: true, render: (r) => `${r.estimated ? '<span class="badge b-warn">ประมาณ · รอชั่ง</span> ' : ''}${statusBadge('receipt', r.status)}` },
+    ], rows, { rowAttr: (r) => `class="click" data-id="${r.id}"`, empty: 'ไม่มีใบรับเข้า' })}${moreBtn(rows.length)}</div>
     <div class="foot-note"><b>ขั้นตอน</b> ร่าง → รอตรวจรับ → ยืนยันรับเข้า · สต็อกเพิ่มตามน้ำหนักที่ตรวจรับจริงเท่านั้น · แยก Lot ทุกรอบรับ</div>`;
   $$('[data-s]', el).forEach((b) => (b.onclick = () => { state.rstatus = b.dataset.s; receiptsTab(el, ctx); }));
   $$('[data-id]', el).forEach((tr) => (tr.onclick = () => receiptView(ctx, Number(tr.dataset.id))));
+  const mb = $('[data-more]', el); if (mb) mb.onclick = async () => { const more = await ctx.api.rpc('api_receipts', { status: state.rstatus || null, limit: PAGE, offset: rows.length }); receiptsTab(el, ctx, rows.concat(more)); };
 }
 
 // ---------------- ตีออก ----------------
-async function dispatchTab(el, ctx) {
-  const [rows, cases] = await Promise.all([ctx.api.rpc('api_dispatches', { status: state.dstatus || null }), ctx.api.rpc('api_cases', { status: 'open' })]);
+async function dispatchTab(el, ctx, prev = null) {
+  const [rows, cases] = prev || await Promise.all([ctx.api.rpc('api_dispatches', { status: state.dstatus || null, limit: PAGE }), ctx.api.rpc('api_cases', { status: 'open' })]);
   el.innerHTML = `<div class="seg">${[['', 'ทั้งหมด'], ['draft', 'ร่าง · รอยืนยัน'], ['shipped', 'ส่งแล้ว รอรับ'], ['partial', 'รับบางส่วน'], ['received,closed', 'รับแล้ว'], ['cancelled', 'ยกเลิก']].map(([k, v]) => `<button data-s="${k}" class="${state.dstatus === k ? 'active' : ''}">${v}</button>`).join('')}</div>
     ${cases.length ? `<div class="card" style="margin-bottom:14px"><div class="card-head"><div><div class="card-title">งานตรวจสอบส่วนต่าง</div><div class="card-sub">รับไม่ครบ/น้ำหนักต่าง ต้องสรุปว่าเป็นของค้างส่ง ส่งคืน หรือสูญเสีย</div></div><span class="badge b-warn">${cases.length} รายการ</span></div>
       ${table([{ label: 'เลขที่', key: 'doc_no' }, { label: 'ใบส่ง', key: 'dispatch_no' }, { label: 'Lot', render: (c) => `<span class="lot">${esc(c.lot_code)}</span>` }, { label: 'ปลายทาง', key: 'destination' },
         { label: 'ส่ง / รับ', right: true, render: (c) => `${fmtN(c.shipped_kg)} / ${fmtN(c.received_kg)}` }, { label: 'ขาด', right: true, render: (c) => `<b style="color:var(--warn-ink)">${fmtN(c.kg)} กก.</b>` },
+        { label: 'ผู้รับผิดชอบ / กำหนด', render: (c) => `${esc(c.assignee || '—')}<div class="small ${new Date(c.due_at) < new Date() ? '' : 'muted'}" style="${new Date(c.due_at) < new Date() ? 'color:var(--danger-ink)' : ''}">${thDateTime(c.due_at)}</div>` },
         { label: '', render: (c) => `<button class="btn sm" data-case="${c.id}">สรุป</button>` }], cases)}</div>` : ''}
     <div class="card">${table([
       { label: 'เลขที่', render: (d) => `<b>${esc(d.doc_no)}</b>` },
@@ -121,11 +125,26 @@ async function dispatchTab(el, ctx) {
       { label: 'ส่ง (กก.)', right: true, render: (d) => fmtN(d.total_kg) },
       { label: 'รับจริง', right: true, render: (d) => (d.total_received_kg != null ? fmtN(d.total_received_kg) : '—') },
       { label: 'สถานะ', right: true, render: (d) => statusBadge('dispatch', d.status) },
-    ], rows, { rowAttr: (d) => `class="click" data-id="${d.id}"`, empty: 'ไม่มีใบตีออก' })}</div>
+    ], rows, { rowAttr: (d) => `class="click" data-id="${d.id}"`, empty: 'ไม่มีใบตีออก' })}${moreBtn(rows.length)}</div>
     <div class="foot-note"><b>กฎสต็อก</b> ยืนยันตีออก = ลดคลังและย้ายเป็นระหว่างทาง · ปลายทางรับจริงเท่าไรเพิ่มเท่านั้น · การโอนไปสาขาไม่ถือเป็นยอดขาย</div>`;
   $$('[data-s]', el).forEach((b) => (b.onclick = () => { state.dstatus = b.dataset.s; dispatchTab(el, ctx); }));
   $$('tr[data-id]', el).forEach((tr) => (tr.onclick = () => dispatchView(ctx, Number(tr.dataset.id))));
   $$('[data-case]', el).forEach((b) => (b.onclick = () => { const c = cases.find((x) => x.id === Number(b.dataset.case)); caseResolve(ctx, c, null); }));
+  const mb = $('[data-more]', el); if (mb) mb.onclick = async () => { const more = await ctx.api.rpc('api_dispatches', { status: state.dstatus || null, limit: PAGE, offset: rows.length }); dispatchTab(el, ctx, [rows.concat(more), cases]); };
+}
+
+// ---------------- ตรวจนับ ----------------
+async function stocktakeTab(el, ctx) {
+  const rows = await ctx.api.rpc('api_stocktakes', { limit: PAGE });
+  el.innerHTML = `<div class="toolbar">${ctx.can.stocktake ? '<button class="btn primary" id="st-new">+ เปิดใบตรวจนับ</button>' : ''}
+      <span class="small muted" style="align-self:center">ถ่ายยอดระบบ → นับจริงทีละรายการ → ผู้จัดการอนุมัติ → ปรับยอดทีเดียว (บันทึกเป็นรายการ "ปรับยอดจากตรวจนับ" ในสมุดเคลื่อนไหว)</span></div>
+    <div class="card">${table([
+      { label: 'เลขที่', render: (t) => `<b>${esc(t.doc_no)}</b>` }, { label: 'สถานที่', render: (t) => `${esc(t.site)} · ${t.zone ? ZONE[t.zone] : 'ทุกจุด'}` },
+      { label: 'เปิดเมื่อ', render: (t) => thDateTime(t.created_at) }, { label: 'นับแล้ว', right: true, render: (t) => `${t.counted_count}/${t.line_count}` },
+      { label: 'ส่วนต่าง (กก.)', right: true, render: (t) => (t.counted_count ? `<b style="color:${Number(t.diff_kg) < 0 ? 'var(--danger-ink)' : 'inherit'}">${Number(t.diff_kg) > 0 ? '+' : ''}${fmtN(t.diff_kg)}</b>` : '—') },
+      { label: 'สถานะ', right: true, render: (t) => statusBadge('stocktake', t.status) }], rows, { rowAttr: (t) => `class="click" data-id="${t.id}"`, empty: 'ยังไม่มีใบตรวจนับ' })}</div>`;
+  const n = $('#st-new', el); if (n) n.onclick = () => stocktakeStart(ctx, ctx.me.site_id);
+  $$('[data-id]', el).forEach((tr) => (tr.onclick = () => stocktakeView(ctx, Number(tr.dataset.id))));
 }
 
 // ---------------- ความสุก ----------------
@@ -146,8 +165,8 @@ async function ripenessTab(el, ctx) {
 }
 
 // ---------------- ประวัติ ----------------
-async function historyTab(el, ctx) {
-  const rows = await ctx.api.rpc('api_movements', { from: state.hfrom, to: state.hto, mtype: state.htype || null, q: state.hq || null, limit: 1000 });
+async function historyTab(el, ctx, prevRows = null) {
+  const rows = prevRows || await ctx.api.rpc('api_movements', { from: state.hfrom, to: state.hto, mtype: state.htype || null, q: state.hq || null, limit: 300 });
   el.innerHTML = `<div class="toolbar"><input class="input" type="date" id="hf" value="${state.hfrom}" style="width:auto"><input class="input" type="date" id="ht" value="${state.hto}" style="width:auto">
       <select class="input" id="hty" style="width:auto"><option value="">ทุกประเภท</option>${Object.entries(MTYPE).map(([k, v]) => `<option value="${k}" ${state.htype === k ? 'selected' : ''}>${v}</option>`).join('')}</select>
       <input class="input grow" id="hq" placeholder="ค้นหา Lot หรือเลขเอกสาร" value="${esc(state.hq)}"><button class="btn" id="go">ค้นหา</button><button class="btn" id="xl">Export Excel</button></div>
@@ -162,7 +181,7 @@ async function historyTab(el, ctx) {
       { label: 'ก่อน → หลัง', right: true, render: (m) => `${fmtN(m.before_kg)} → ${fmtN(m.after_kg)}` },
       { label: 'ผู้ทำ / ผู้อนุมัติ', render: (m) => `${esc(m.actor || '-')}${m.approver && m.approver !== m.actor ? `<div class="small muted">อนุมัติ: ${esc(m.approver)}</div>` : ''}` },
       { label: 'เหตุผล / คู่ค้า', render: (m) => `<span class="small">${esc(m.reason || m.counterparty || '')}</span>` },
-    ], rows, { rowAttr: (m) => `class="click" data-lot="${m.lot_id}"`, empty: 'ไม่มีการเคลื่อนไหวในช่วงนี้' })}</div>
+    ], rows, { rowAttr: (m) => `class="click" data-lot="${m.lot_id}"`, empty: 'ไม่มีการเคลื่อนไหวในช่วงนี้' })}${moreBtn(rows.length, 300)}</div>
     <div class="foot-note"><b>สมุดเคลื่อนไหว</b> เพิ่มได้อย่างเดียว ห้ามแก้ไข/ลบ · รายการผิดแก้ด้วยการกลับรายการหรือปรับยอดที่อ้างอิงของเดิม</div>`;
   $('#go', el).onclick = () => { state.hfrom = $('#hf', el).value; state.hto = $('#ht', el).value; state.htype = $('#hty', el).value; state.hq = $('#hq', el).value; historyTab(el, ctx); };
   $('#xl', el).onclick = () => exportExcel('ประวัติเคลื่อนไหว-' + state.hfrom + '_' + state.hto, [
@@ -171,4 +190,5 @@ async function historyTab(el, ctx) {
     { key: 'actor', label: 'ผู้ทำ' }, { key: 'approver', label: 'ผู้อนุมัติ' }, { key: 'reason', label: 'เหตุผล' }],
     rows.map((m) => ({ ...m, time: thDateTime(m.occurred_at), type: MTYPE[m.mtype] || m.mtype, zonel: ZONE[m.zone], rip: RIP[m.ripeness] })));
   $$('[data-lot]', el).forEach((tr) => (tr.onclick = () => lotTrace(ctx, Number(tr.dataset.lot))));
+  const mb = $('[data-more]', el); if (mb) mb.onclick = async () => { const more = await ctx.api.rpc('api_movements', { from: state.hfrom, to: state.hto, mtype: state.htype || null, q: state.hq || null, limit: 300, offset: rows.length }); historyTab(el, ctx, rows.concat(more)); };
 }

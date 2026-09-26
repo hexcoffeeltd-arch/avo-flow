@@ -14,8 +14,12 @@ export async function render(el, ctx, params) {
   if (tab === 'audit') await audit(t, ctx);
 }
 
+const LINE_KINDS = [['overripe', 'สุกมาก'], ['ripe', 'สุกแล้วควรจ่าย'], ['near_ripe', 'ใกล้สุก'], ['aging', 'ค้างคลัง'], ['late', 'ค้างรับเกินเวลา'], ['case', 'รับไม่ครบ'],
+  ['overdue', 'งานเกินกำหนด'], ['pending_adjust', 'รออนุมัติตัดทิ้ง/ปรับยอด'], ['pending_return', 'รออนุมัติรับคืน'], ['credit_needed', 'ต้องออกใบลดหนี้'],
+  ['pending_stocktake', 'ผลตรวจนับรออนุมัติ'], ['pending_receipt', 'รอตรวจรับ'], ['low_stock', 'สต็อกต่ำ'], ['weight', 'น้ำหนักรับเข้าไม่ตรง']];
+
 function general(el, ctx) {
-  const s = ctx.master.settings || {}; const th = s.thresholds || {}; const op = s.options || {}; const co = s.company || {};
+  const s = ctx.master.settings || {}; const th = s.thresholds || {}; const op = s.options || {}; const co = s.company || {}; const ln = s.line || {};
   const num = (k, label, hint, unit) => field(`${label}${unit ? ` (${unit})` : ''}`, `<input class="input" type="number" min="0" step="any" name="${k}" value="${esc(th[k] ?? '')}">`, { hint });
   el.innerHTML = `<div class="split"><div class="card"><div class="card-title" style="margin-bottom:12px">เกณฑ์แจ้งเตือน</div>
       <div class="form-grid" id="th">
@@ -25,6 +29,10 @@ function general(el, ctx) {
         ${num('receive_deadline_hours', 'ปลายทางต้องยืนยันรับภายใน', 'หลังตีออก', 'ชม.')}
         ${num('std_basket_kg', 'น้ำหนักมาตรฐานต่อตะกร้า', 'ใช้เทียบกับน้ำหนักชั่งจริง', 'กก.')}
         ${num('weight_variance_pct', 'เตือนน้ำหนักไม่ตรงเมื่อต่างเกิน', '', '%')}
+        ${num('shrink_auto_pct', 'ชั่งซ้ำ: น้ำหนักหายไม่เกิน', 'บันทึกทันที · เกินกว่านี้ต้องผู้จัดการอนุมัติ', '%')}
+        ${num('task_due_hours', 'งานส่งต่อ: กำหนดเสร็จภายใน', 'ส่วนต่าง อนุมัติ รับคืน ตรวจนับ', 'ชม.')}
+        ${num('receipt_check_hours', 'ต้องตรวจรับจากสวนภายใน', 'นับจากส่งตรวจรับ', 'ชม.')}
+        ${num('bill_due_hours', 'ต้องออกบิลภายใน', 'นับจากลูกค้ารับของ', 'ชม.')}
       </div><div class="card-title" style="margin:18px 0 12px">ข้อบังคับ</div>
       <div class="grid" id="op">
         <label class="check"><input type="checkbox" name="require_receive_photo" ${op.require_receive_photo !== false ? 'checked' : ''}> ต้องแนบรูปเมื่อยืนยันรับปลายทาง</label>
@@ -33,14 +41,30 @@ function general(el, ctx) {
       </div></div>
     <div class="card"><div class="card-title" style="margin-bottom:12px">ข้อมูลบริษัท (หัวบิล / ใบเสนอราคา)</div>
       <div class="grid" id="co">${field('ชื่อบริษัท', `<input class="input" name="name" value="${esc(co.name || '')}">`)}${field('ที่อยู่', `<textarea class="input" name="address">${esc(co.address || '')}</textarea>`)}
-        ${field('เลขประจำตัวผู้เสียภาษี', `<input class="input" name="tax_id" value="${esc(co.tax_id || '')}">`)}${field('โทรศัพท์', `<input class="input" name="phone" value="${esc(co.phone || '')}">`)}</div></div></div>
+        ${field('เลขประจำตัวผู้เสียภาษี (13 หลัก)', `<input class="input" name="tax_id" value="${esc(co.tax_id || '')}" inputmode="numeric">`)}
+        ${field('สาขา (ผู้ขาย)', `<input class="input" name="branch" value="${esc(co.branch || 'สำนักงานใหญ่')}">`, { hint: 'พิมพ์บนใบกำกับภาษี เช่น สำนักงานใหญ่ หรือ 00001' })}
+        ${field('โทรศัพท์', `<input class="input" name="phone" value="${esc(co.phone || '')}">`)}</div></div></div>
+    <div class="card" style="margin-top:14px"><div class="card-head"><div><div class="card-title">แจ้งเตือนผ่าน LINE</div><div class="card-sub">ส่งสรุปแจ้งเตือนตามเวลาที่ตั้งใน GitHub Actions (ดูวิธีตั้งค่าใน docs/LINE.md) · ไม่แจ้งเรื่องเดิมซ้ำภายในเวลาที่กำหนด</div></div></div>
+      <div class="grid" id="ln">
+        <label class="check"><input type="checkbox" name="enabled" ${ln.enabled ? 'checked' : ''}> เปิดส่งแจ้งเตือน LINE</label>
+        <div class="form-grid">${field('ไม่แจ้งเรื่องเดิมซ้ำภายใน (ชม.)', `<input class="input" type="number" min="1" name="repeat_hours" value="${esc(ln.repeat_hours ?? 20)}">`)}
+          ${field('ลิงก์เปิดระบบ (แนบท้ายข้อความ)', `<input class="input" name="app_url" value="${esc(ln.app_url || location.origin + location.pathname)}">`)}</div>
+        <div class="small muted">เรื่องที่ส่ง</div>
+        <div class="check-grid">${LINE_KINDS.map(([k, v]) => `<label class="check"><input type="checkbox" data-kind="${k}" ${(ln.kinds || LINE_KINDS.map((x) => x[0])).includes(k) ? 'checked' : ''}> ${v}</label>`).join('')}</div>
+        <div class="actions"><button class="btn" id="ln-preview" type="button">ดูตัวอย่างข้อความตอนนี้</button></div><pre class="line-preview hidden" id="ln-text"></pre></div></div>
     <div class="actions" style="margin-top:14px;justify-content:flex-end"><button class="btn primary" id="save">บันทึกการตั้งค่า</button></div>`;
+  $('#ln-preview', el).onclick = (e) => busy(e.currentTarget, async () => {
+    const r = await ctx.api.rpc('api_line_preview', {}); const pre = $('#ln-text', el);
+    pre.textContent = r.text || 'ตอนนี้ไม่มีเรื่องที่ต้องแจ้ง'; pre.classList.remove('hidden');
+  });
   $('#save', el).onclick = (e) => busy(e.currentTarget, async () => {
     const t = Object.fromEntries(Object.entries(formData($('#th', el))).map(([k, v]) => [k, v == null ? null : Number(v)]));
     const o = formData($('#op', el)); o.max_sales_discount_pct = Number(o.max_sales_discount_pct || 0);
     await ctx.api.rpc('api_settings_save', { key: 'thresholds', value: t });
     await ctx.api.rpc('api_settings_save', { key: 'options', value: o });
     await ctx.api.rpc('api_settings_save', { key: 'company', value: formData($('#co', el)) });
+    const lv = formData($('#ln', el));
+    await ctx.api.rpc('api_settings_save', { key: 'line', value: { enabled: !!lv.enabled, repeat_hours: Number(lv.repeat_hours || 20), app_url: lv.app_url || '', kinds: $$('[data-kind]', el).filter((c) => c.checked).map((c) => c.dataset.kind) } });
     await ctx.reloadMe(); toast('บันทึกการตั้งค่าแล้ว', 'ok');
   });
 }
@@ -73,14 +97,19 @@ async function prices(el, ctx) {
   el.innerHTML = `<div class="notice info">ฝ่ายขายต้องใช้ราคาที่ตั้งไว้ (แก้หน้าบิลไม่ได้) · ราคาเฉพาะลูกค้าจะใช้ก่อนราคามาตรฐาน · ผู้บริหาร/Admin แก้ราคาหน้าบิลได้</div>
     <div class="toolbar"><button class="btn primary" id="add">+ ตั้งราคา</button></div>
     <div class="card">${table([{ label: 'ลูกค้า', render: (p) => (p.customer ? esc(p.customer) : '<span class="badge b-ok">ราคามาตรฐาน</span>') }, { label: 'สายพันธุ์', key: 'variety' }, { label: 'ไซส์', key: 'size' },
-      { label: 'ประเภท', render: (p) => (p.product === 'frozen' ? 'แช่แข็ง' : 'สด') }, { label: 'ราคาขาย/กก.', right: true, render: (p) => `<b>${fmtMoney(p.sell_price)}</b>` }, { label: 'แก้ไขล่าสุด', render: (p) => thDateTime(p.updated_at) }],
+      { label: 'ประเภท', render: (p) => (p.product === 'frozen' ? 'แช่แข็ง' : 'สด') }, { label: 'ราคาขาย/กก.', right: true, render: (p) => `<b>${fmtMoney(p.sell_price)}</b>` },
+      { label: 'กรอบให้ฝ่ายขาย', right: true, render: (p) => (p.min_price != null || p.max_price != null ? `${fmtMoney(p.min_price ?? p.sell_price)} – ${fmtMoney(p.max_price ?? p.sell_price)}` : '<span class="muted small">ราคาเดียว</span>') },
+      { label: 'แก้ไขล่าสุด', render: (p) => thDateTime(p.updated_at) }],
       rows, { rowAttr: (p, i) => `class="click" data-i="${i}"`, empty: 'ยังไม่ได้ตั้งราคา' })}</div>`;
   const edit = (p = null) => {
     const m = openModal({ title: p ? 'แก้ไขราคา' : 'ตั้งราคาขาย', size: 'sm',
       body: `<div class="grid" id="pf">${field('ลูกค้า', `<select class="input" name="customer_id">${opt(M.customers, p?.customer_id, (c) => c.name, (c) => c.id, 'ราคามาตรฐาน (ทุกลูกค้า)')}</select>`)}
         ${field('สายพันธุ์', `<select class="input" name="variety_id">${opt(M.varieties, p?.variety_id)}</select>`, { req: true })}${field('ไซส์', `<select class="input" name="size_id">${opt(M.sizes, p?.size_id)}</select>`, { req: true })}
         ${field('ประเภท', `<select class="input" name="product"><option value="fresh">สด</option><option value="frozen" ${p?.product === 'frozen' ? 'selected' : ''}>แช่แข็ง</option></select>`)}
-        ${field('ราคาขาย (บาท/กก.)', `<input class="input" type="number" min="0" step="0.01" name="sell_price" value="${esc(p?.sell_price ?? '')}">`, { hint: 'เว้นว่างแล้วบันทึก = ลบราคานี้' })}</div>`,
+        ${field('ราคาขาย (บาท/กก.)', `<input class="input" type="number" min="0" step="0.01" name="sell_price" value="${esc(p?.sell_price ?? '')}">`, { hint: 'เว้นว่างแล้วบันทึก = ลบราคานี้' })}
+        <div class="form-grid">${field('ต่ำสุดที่ฝ่ายขายให้ได้', `<input class="input" type="number" min="0" step="0.01" name="min_price" value="${esc(p?.min_price ?? '')}">`)}
+          ${field('สูงสุด', `<input class="input" type="number" min="0" step="0.01" name="max_price" value="${esc(p?.max_price ?? '')}">`)}</div>
+        <div class="hint">กรอบราคาที่อนุมัติล่วงหน้า: ฝ่ายขายเลือกราคาในกรอบนี้ได้เอง · เว้นว่างทั้งสองช่อง = ต้องใช้ราคาขายเท่านั้น</div></div>`,
       foot: '<button class="btn primary" id="ok">บันทึก</button>' });
     $('#ok', m.el).onclick = (e) => busy(e.currentTarget, async () => { await ctx.api.rpc('api_price_save', formData($('#pf', m.el))); m.close(); toast('บันทึกราคาแล้ว', 'ok'); prices(el, ctx); });
   };

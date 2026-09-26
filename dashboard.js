@@ -35,7 +35,7 @@ export async function render(el, ctx) {
     <div class="card kpi"><div class="label">สต็อกในคลัง</div><div class="value num">${fmtN(d.warehouse_kg)} <small>กก.</small></div><div class="foot">พร้อมจ่าย ${fmtN(d.ready_kg)} กก.${low.length ? ` · <span style="color:var(--warn-ink)">ใกล้หมด ${low.length} สายพันธุ์</span>` : ''}</div></div>
     <div class="card kpi"><div class="label">จำนวนตะกร้า</div><div class="value num">${fmtN(d.baskets)} <small>ตะกร้า</small></div><div class="foot">รวมทุกสายพันธุ์ · แช่แข็ง ${fmtN(d.frozen_bags)} ถุง</div></div>
     <div class="card kpi"><div class="label">สต็อกระหว่างทาง</div><div class="value num">${fmtN(d.transit_kg)} <small>กก.</small></div><div class="foot">รอสาขา/ลูกค้ายืนยันรับ</div></div>
-    <div class="card kpi ${pending ? 'warn' : ''}"><div class="label">งานรอตรวจสอบ</div><div class="value num">${pending} <small>รายการ</small></div><div class="foot">รับไม่ครบ ${partial} รายการ</div></div>`}
+    <div class="card kpi ${pending ? 'warn' : ''} click" id="kpi-tasks"><div class="label">งานรอตรวจสอบ</div><div class="value num">${pending} <small>รายการ</small></div><div class="foot">รับไม่ครบ ${partial} รายการ${d.overdue_tasks ? ` · <span style="color:var(--danger-ink)">เกินกำหนด ${d.overdue_tasks}</span>` : ''}</div></div>`}
   </div>
 
   <div class="row-2">
@@ -48,7 +48,7 @@ export async function render(el, ctx) {
       <div class="bars">${RIP_ORDER.map((k) => `<div class="bar-row"><span>${RIP[k]}</span><div class="bar-track"><div class="bar-fill" style="width:${ripTotal ? (Number(d.by_ripeness[k] || 0) / ripTotal) * 100 : 0}%;background:${RIP_COLOR[k]}"></div></div><span class="right num">${fmtN(d.by_ripeness[k] || 0)}</span></div>`).join('')}</div>`}
       <div class="legend"><span><i></i>ค้นจาก Lot ได้</span><span>อัปเดตจากการตรวจจริง</span></div>
     </div>
-    <div class="card"><div class="card-head"><div class="card-title">งานที่ต้องส่งต่อ</div><a class="link" href="#/alerts">ดูทั้งหมด →</a></div>
+    <div class="card"><div class="card-head"><div class="card-title">งานที่ต้องส่งต่อ</div><a class="link" href="#/tasks">คิวงาน · ผู้รับผิดชอบ →</a></div>
       <div class="queue">${d.queue.filter((q) => !(isBranch && ['to_bill', 'pending_receipt', 'draft_dispatch'].includes(q.key))).map((q, i) => `<div class="queue-item ${q.count ? '' : 'zero'}" data-q="${q.key}"><span class="n">${i + 1}</span><div><div class="t">${esc(q.title)}</div><div class="s">${esc(q.sub)}</div></div><span class="c num">${q.count}</span></div>`).join('')}</div>
     </div>
   </div>
@@ -88,5 +88,8 @@ export async function render(el, ctx) {
     else if (k === 'in_transit' || k === 'partial') ctx.go(isBranch || !ctx.can.seeWarehouse ? 'branches' : 'warehouse/dispatch');
     else if (k === 'pending_adjust') approvalsModal(ctx);
     else if (k === 'to_bill') ctx.go('sales/billable');
+    else if (k === 'pending_return') ctx.go(ctx.can.invoices ? 'sales/returns' : 'tasks');
+    else ctx.go('tasks');
   }));
+  const kt = $('#kpi-tasks', el); if (kt) kt.onclick = () => ctx.go('tasks');
 }
