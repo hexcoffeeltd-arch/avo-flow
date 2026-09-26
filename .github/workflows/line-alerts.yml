@@ -1,0 +1,37 @@
+# AVO FLOW — ส่งสรุปแจ้งเตือนเข้า LINE ตามเวลา (ดูวิธีตั้งค่าใน docs/LINE.md)
+# ต้องตั้ง Secrets ใน GitHub: AVO_DATABASE_URL, LINE_CHANNEL_ACCESS_TOKEN และ (ถ้ามี) LINE_TO
+name: LINE alerts (AVO FLOW)
+on:
+  schedule:
+    - cron: '30 0 * * *'   # 07:30 น. เวลาไทย
+    - cron: '30 4 * * *'   # 11:30 น.
+    - cron: '30 8 * * *'   # 15:30 น.
+  workflow_dispatch: {}     # กดส่งเองได้ที่แท็บ Actions → Run workflow
+jobs:
+  notify:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Send AVO FLOW digest to LINE
+        env:
+          DATABASE_URL: ${{ secrets.AVO_DATABASE_URL }}
+          LINE_TOKEN: ${{ secrets.LINE_CHANNEL_ACCESS_TOKEN }}
+          LINE_TO: ${{ secrets.LINE_TO }}
+        run: |
+          set -euo pipefail
+          command -v psql >/dev/null || { sudo apt-get -qq update && sudo apt-get -qq install -y postgresql-client; }
+          LINE_API="${LINE_API:-https://api.line.me}"
+          J=$(psql "$DATABASE_URL" -tAX -c "select coalesce(avo.line_digest()::text, '')")
+          if [ -z "$J" ]; then echo "ไม่มีเรื่องใหม่ที่ต้องแจ้ง (หรือยังไม่ได้เปิดใช้ใน ตั้งค่า)"; exit 0; fi
+          TEXT=$(printf '%s' "$J" | jq -r .text)
+          if [ -n "${LINE_TO:-}" ]; then
+            URL="$LINE_API/v2/bot/message/push"; BODY=$(jq -n --arg to "$LINE_TO" --arg t "$TEXT" '{to:$to,messages:[{type:"text",text:$t}]}')
+          else
+            URL="$LINE_API/v2/bot/message/broadcast"; BODY=$(jq -n --arg t "$TEXT" '{messages:[{type:"text",text:$t}]}')
+          fi
+          CODE=$(curl -sS -o /tmp/line.json -w '%{http_code}' -X POST "$URL" -H "Authorization: Bearer $LINE_TOKEN" -H 'Content-Type: application/json' -d "$BODY")
+          cat /tmp/line.json; echo
+          if [ "$CODE" != "200" ]; then echo "LINE ตอบกลับ HTTP $CODE — ตรวจ token / LINE_TO / โควตาข้อความ"; exit 1; fi
+          KEYS=$(printf '%s' "$J" | jq -c .keys)
+          printf "select avo.line_mark(array(select jsonb_array_elements_text(:'keys'::jsonb)));\n" | psql "$DATABASE_URL" -tAX -v keys="$KEYS"
+          echo "ส่งแล้ว $(printf '%s' "$J" | jq .count) เรื่อง"
