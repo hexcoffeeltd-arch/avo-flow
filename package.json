@@ -1,9 +1,0 @@
-{
-  "name": "avo-flow",
-  "private": true,
-  "type": "module",
-  "description": "AVO FLOW — ระบบจัดการสต็อกอะโวคาโด (static web app + PostgreSQL functions)",
-  "scripts": {
-    "test": "python3 tests/test_sql.py && python3 tests/test_sql.py --demo"
-  }
-}
