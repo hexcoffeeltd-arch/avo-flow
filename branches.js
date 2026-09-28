@@ -23,9 +23,9 @@ export async function render(el, ctx, params) {
   const incomingLines = b.incoming.flatMap((d) => d.lines.map((l) => ({ d, l })));
   const partial = b.incoming.filter((d) => d.status === 'partial').length;
 
-  el.innerHTML = `<div class="page-head"><div><h1>สาขาและส่งต่องาน</h1><div class="sub">ดูสินค้าหน้าร้าน หลังร้าน แช่แข็ง และงานระหว่างขนส่ง</div></div>
+  el.innerHTML = `<div class="page-head"><div><h1>สาขาและส่งต่องาน</h1><div class="sub">${branches.length > 1 ? '' : `<b>${esc(b.site.name)}</b> · `}ดูสินค้าหน้าร้าน หลังร้าน แช่แข็ง และงานระหว่างขนส่ง</div></div>
       <div class="actions">${whs.length ? '<button class="btn primary" id="tr">+ โอนสต็อก</button>' : act ? '<button class="btn primary" id="tr-out">+ โอนออก / ส่งลูกค้า</button>' : ''}</div></div>
-    <div class="seg"><button class="active">${esc(b.site.name)}</button>${branches.length > 1 ? `<select class="input" id="pick" style="width:auto;height:42px"><option value="">เลือกสาขาอื่น</option>${opt(branches.filter((x) => x.id !== current), '')}</select>` : ''}</div>
+    ${branches.length > 1 ? `<div class="seg"><select class="input" id="pick" style="width:auto;min-width:220px;height:42px" aria-label="เลือกสาขา">${opt(branches, b.site.id)}</select></div>` : ''}
     ${act ? `<div class="toolbar">
       <button class="btn sm" data-op="zone">ย้ายหลังร้าน → หน้าร้าน</button><button class="btn sm" data-op="rip">ตรวจความสุก</button><button class="btn sm" data-op="freeze">แปรรูปแช่แข็ง</button>
       <button class="btn sm" data-op="retail_sale">ขายหน้าร้าน</button><button class="btn sm" data-op="internal_use">นำไปใช้</button><button class="btn sm" data-op="waste">ตัดทิ้ง</button><button class="btn sm" data-op="count_adjust">ปรับยอดนับจริง</button>
@@ -57,7 +57,7 @@ export async function render(el, ctx, params) {
     ${b.recent.length ? `<div class="card"><div class="card-title" style="margin-bottom:10px">รับล่าสุด</div>${table([{ label: 'ใบโอน', key: 'doc_no' }, { label: 'ต้นทาง', key: 'from_site' }, { label: 'รับเมื่อ', render: (d) => thDateTime(d.received_at) }, { label: 'ส่ง / รับ', right: true, render: (d) => `${fmtN(d.total_kg)} / ${fmtN(d.total_received_kg)} กก.` }, { label: 'ผู้รับ', key: 'receiver_name' }, { label: '', right: true, render: (d) => statusBadge('dispatch', d.status) }], b.recent, { rowAttr: (d) => `class="click" data-d="${d.id}"` })}</div>` : ''}
     <div class="foot-note"><b>กฎสต็อก</b> คลัง → ระหว่างทาง → สาขา · ไม่นับยอดซ้ำ · ตัดทิ้งและปรับยอดต้องให้ผู้จัดการสาขาอนุมัติ</div>`;
 
-  const p = $('#pick', el); if (p) p.onchange = () => { if (p.value) ctx.go('branches/' + p.value); };
+  const p = $('#pick', el); if (p) p.onchange = () => { if (p.value && Number(p.value) !== b.site.id) ctx.go('branches/' + p.value); };
   const tr = $('#tr', el); if (tr) tr.onclick = () => dispatchForm(ctx, { kind: 'transfer', from_site_id: whs[0].id, to_site_id: current });
   const to = $('#tr-out', el); if (to) to.onclick = () => dispatchForm(ctx, { kind: 'transfer', from_site_id: current });
   $$('[data-d]', el).forEach((r) => (r.onclick = () => dispatchView(ctx, Number(r.dataset.d))));

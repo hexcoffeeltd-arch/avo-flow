@@ -30,7 +30,11 @@ export function wrapOffline(api, AppError) {
   const resolvePhotos = async (p) => {
     const out = { ...p };
     for (const [k, v] of Object.entries(out)) {
-      if (typeof v === 'string' && v.startsWith('local:data:image')) out[k] = (await raw('api_attachment_save', { data: v.slice(6) })).ref;
+      if (typeof v === 'string' && v.includes('local:data:image')) {
+        const parts = [];
+        for (const r of v.split('|')) parts.push(r.startsWith('local:data:image') ? (await raw('api_attachment_save', { data: r.slice(6) })).ref : r);
+        out[k] = parts.join('|');
+      }
     }
     return out;
   };

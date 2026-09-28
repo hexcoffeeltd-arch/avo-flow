@@ -148,35 +148,61 @@ export function compressImage(file, max = 800, quality = 0.7) {
     img.src = url;
   });
 }
-export const photoField = (name, label = 'รูปหลักฐาน', req = false) => field(label,
-  `<div class="photo-field" data-photo="${name}"><input type="hidden" name="${name}"><img class="photo-thumb hidden" alt="">
-   <label class="btn sm"><input type="file" accept="image/*" capture="environment" class="hidden">📷 ถ่าย/แนบรูป</label><span class="small muted" data-st></span></div>`, { req });
+// รูปหลักฐานแนบได้หลายรูป (ถ่ายรูป หรือเลือกจากอัลบั้มทีละหลายรูป) · เก็บเป็นรหัสรูปคั่นด้วย |
+export const EV_SEP = '|';
+export const MAX_PHOTOS = 8;
+export const evidenceRefs = (v) => (v ? String(v).split(EV_SEP).filter(Boolean) : []);
+export const photoField = (name, label = 'รูปหลักฐาน', req = false, value = '') => field(label,
+  `<div class="photo-field" data-photo="${name}"><input type="hidden" name="${name}" value="${esc(value || '')}"><div class="photo-list" data-list></div>
+   <span class="photo-btns"><label class="btn sm"><input type="file" accept="image/*" capture="environment" class="hidden" data-cam>📷 ถ่ายรูป</label>
+   <label class="btn sm"><input type="file" accept="image/*" multiple class="hidden" data-alb>🖼 เลือกจากอัลบั้ม</label></span>
+   <span class="small muted" data-st></span></div>`, { req, hint: `แนบได้สูงสุด ${MAX_PHOTOS} รูป` });
 export function bindPhotoFields(root, api) {
   $$('[data-photo]', root).forEach((w) => {
-    const inp = $('input[type=file]', w);
-    inp.onchange = async () => {
-      const f = inp.files[0]; if (!f) return;
-      const st = $('[data-st]', w); st.textContent = 'กำลังอัปโหลด…';
-      let data;
-      try {
-        data = await compressImage(f);
-        const r = await api.rpc('api_attachment_save', { data });
-        $('input[type=hidden]', w).value = r.ref; const im = $('img', w); im.src = data; im.classList.remove('hidden'); st.textContent = 'แนบแล้ว';
-      } catch (e) {
-        if (data && api.isNetworkError?.(e)) {
-          // สัญญาณหลุด: เก็บรูปไว้ในเครื่อง ระบบจะอัปโหลดให้ตอนส่งรายการ
-          $('input[type=hidden]', w).value = 'local:' + data; const im = $('img', w); im.src = data; im.classList.remove('hidden'); st.textContent = 'เก็บไว้ในเครื่อง (ออฟไลน์)';
-        } else { st.textContent = ''; toast(e.message, 'err'); }
-      }
+    const hid = $('input[type=hidden]', w); const list = $('[data-list]', w); const st = $('[data-st]', w);
+    const items = evidenceRefs(hid.value).map((ref) => ({ ref, src: ref.startsWith('local:') ? ref.slice(6) : null }));
+    const sync = () => { hid.value = items.map((x) => x.ref).join(EV_SEP); };
+    const draw = () => {
+      list.innerHTML = items.map((x, i) => `<span class="photo-item"><img class="photo-thumb" alt="" ${x.src ? `src="${esc(x.src)}"` : ''} data-i="${i}"><button type="button" class="photo-del" data-del="${i}" aria-label="ลบรูป">×</button></span>`).join('');
+      $$('[data-del]', list).forEach((b) => (b.onclick = () => { items.splice(Number(b.dataset.del), 1); sync(); draw(); }));
+      items.forEach((x, i) => { if (!x.src && x.ref.startsWith('att:')) api.rpc('api_attachment_get', { ref: x.ref }).then((r) => { x.src = r?.data || ''; const im = $(`img[data-i="${i}"]`, list); if (im && x.src) im.src = x.src; }).catch(() => {}); });
     };
+    const add = async (files) => {
+      const room = MAX_PHOTOS - items.length; const fs = [...files].slice(0, Math.max(room, 0));
+      if (files.length > room) toast(`แนบได้สูงสุด ${MAX_PHOTOS} รูป`, 'err');
+      let n = 0;
+      for (const f of fs) {
+        st.textContent = `กำลังอัปโหลด ${++n}/${fs.length}…`; let data;
+        try {
+          data = await compressImage(f);
+          const r = await api.rpc('api_attachment_save', { data });
+          items.push({ ref: r.ref, src: data });
+        } catch (e) {
+          // สัญญาณหลุด: เก็บรูปไว้ในเครื่อง ระบบจะอัปโหลดให้ตอนส่งรายการ
+          if (data && api.isNetworkError?.(e)) items.push({ ref: 'local:' + data, src: data });
+          else toast(e.message, 'err');
+        }
+        sync(); draw();
+      }
+      st.textContent = items.length ? `แนบแล้ว ${items.length} รูป${items.some((x) => x.ref.startsWith('local:')) ? ' (บางรูปเก็บไว้ในเครื่อง รอส่งตอนมีสัญญาณ)' : ''}` : '';
+    };
+    $$('input[type=file]', w).forEach((inp) => (inp.onchange = async () => { const files = inp.files; if (files?.length) await add(files); inp.value = ''; }));
+    draw(); if (items.length) st.textContent = `แนบแล้ว ${items.length} รูป`;
   });
 }
 export async function showEvidence(el, ref, api) {
-  if (!ref) { el.innerHTML = '<span class="muted small">ไม่มีรูปแนบ</span>'; return; }
-  if (ref.startsWith('local:')) { el.innerHTML = `<img class="evidence-img" src="${esc(ref.slice(6))}" alt="หลักฐาน">`; return; }
-  try { const r = await api.rpc('api_attachment_get', { ref }); el.innerHTML = r?.data ? `<img class="evidence-img" src="${esc(r.data)}" alt="หลักฐาน">` : '<span class="muted small">ไม่พบรูป</span>';
-    const im = $('img', el); if (im) im.onclick = () => openModal({ title: 'รูปหลักฐาน', size: 'lg', body: `<img src="${esc(r.data)}" style="width:100%;border-radius:10px" alt="">` });
-  } catch (e) { el.innerHTML = '<span class="muted small">โหลดรูปไม่ได้</span>'; }
+  const refs = evidenceRefs(ref);
+  if (!refs.length) { el.innerHTML = '<span class="muted small">ไม่มีรูปแนบ</span>'; return; }
+  el.innerHTML = `<div class="evidence-grid">${refs.map((_, i) => `<img class="evidence-img" data-i="${i}" alt="หลักฐาน ${i + 1}">`).join('')}</div>`;
+  await Promise.all(refs.map(async (r, i) => {
+    const im = $(`img[data-i="${i}"]`, el);
+    try {
+      const src = r.startsWith('local:') ? r.slice(6) : (await api.rpc('api_attachment_get', { ref: r }))?.data;
+      if (!src) { im.replaceWith(Object.assign(document.createElement('span'), { className: 'muted small', textContent: 'ไม่พบรูป' })); return; }
+      im.src = src;
+      im.onclick = () => openModal({ title: `รูปหลักฐาน ${refs.length > 1 ? `(${i + 1}/${refs.length})` : ''}`, size: 'lg', body: `<img src="${esc(src)}" style="width:100%;border-radius:10px" alt="">` });
+    } catch (e) { im.replaceWith(Object.assign(document.createElement('span'), { className: 'muted small', textContent: 'โหลดรูปไม่ได้' })); }
+  }));
 }
 
 // ---------- Export Excel ----------

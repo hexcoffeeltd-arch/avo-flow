@@ -118,7 +118,7 @@ async function dispatchTab(el, ctx, prev = null) {
         { label: '', render: (c) => `<button class="btn sm" data-case="${c.id}">สรุป</button>` }], cases)}</div>` : ''}
     <div class="card">${table([
       { label: 'เลขที่', render: (d) => `<b>${esc(d.doc_no)}</b>` },
-      { label: 'วันที่', render: (d) => thDateTime(d.shipped_at || d.created_at) },
+      { label: 'วันที่', render: (d) => (d.doc_date ? thDate(d.doc_date) + (d.shipped_at ? `<div class="small muted">ส่ง ${thDateTime(d.shipped_at)}</div>` : '') : thDateTime(d.shipped_at || d.created_at)) },
       { label: 'ประเภท', render: (d) => (d.kind === 'sale' ? `ขาย · ${CHANNEL[d.channel] || ''}` : 'โอนสาขา') },
       { label: 'ต้นทาง', render: (d) => `${esc(d.from_site)} · ${ZONE[d.from_zone]}` },
       { label: 'ปลายทาง', render: (d) => esc(d.destination) },

@@ -1,4 +1,4 @@
-import { $, $$, esc, fmtN, fmtMoney, thDateTime, ROLE, CHANNEL, table, opt, field, formData, openModal, busy, toast } from './ui.js';
+import { $, $$, esc, fmtN, fmtMoney, thDateTime, ROLE, CHANNEL, table, opt, field, formData, openModal, busy, toast, confirmBox } from './ui.js';
 
 export async function render(el, ctx, params) {
   const c = ctx.can;
@@ -28,6 +28,7 @@ function general(el, ctx) {
         ${num('aging_days', 'ค้างคลังเมื่ออายุ Lot เกิน', '', 'วัน')}
         ${num('receive_deadline_hours', 'ปลายทางต้องยืนยันรับภายใน', 'หลังตีออก', 'ชม.')}
         ${num('std_basket_kg', 'น้ำหนักมาตรฐานต่อตะกร้า', 'ใช้เทียบกับน้ำหนักชั่งจริง', 'กก.')}
+        ${num('basket_tare_kg', 'น้ำหนักตะกร้าเปล่าต่อใบ', 'รับเข้า: น้ำหนักตะกร้า = จำนวนตะกร้า × ค่านี้ (แก้ในใบได้)', 'กก.')}
         ${num('weight_variance_pct', 'เตือนน้ำหนักไม่ตรงเมื่อต่างเกิน', '', '%')}
         ${num('shrink_auto_pct', 'ชั่งซ้ำ: น้ำหนักหายไม่เกิน', 'บันทึกทันที · เกินกว่านี้ต้องผู้จัดการอนุมัติ', '%')}
         ${num('task_due_hours', 'งานส่งต่อ: กำหนดเสร็จภายใน', 'ส่วนต่าง อนุมัติ รับคืน ตรวจนับ', 'ชม.')}
@@ -141,14 +142,22 @@ async function users(el, ctx, rerender) {
         ${field('สาขา / คลัง', `<select class="input" name="site_id">${opt(M.sites, u.site_id, (s) => s.name, (s) => s.id, 'ทุกสาขา (ไม่ผูก)')}</select>`, { hint: 'ฝ่ายสาขาต้องผูกสาขา · คลังผูกคลังหรือเว้นว่าง = ทุกคลัง' })}
         <label class="check"><input type="checkbox" name="is_manager" ${u.is_manager ? 'checked' : ''}> ผู้จัดการ (อนุมัติได้)</label>
         <label class="check"><input type="checkbox" name="active" ${u.active ? 'checked' : ''}> เปิดใช้งาน</label></div>`,
-      foot: '<button class="btn primary" id="ok">บันทึก</button>' });
+      foot: `<div class="left">${u.id === ctx.me.id ? '' : u.can_delete ? '<button class="btn danger" id="del">ลบบัญชี</button>'
+          : '<span class="small muted" title="มีประวัติทำรายการ ต้องเก็บไว้ตรวจสอบ">ลบไม่ได้ (มีประวัติทำรายการ) · ปิดใช้งานแทนได้</span>'}</div>
+        <button class="btn primary" id="ok">บันทึก</button>` });
     $('#ok', m.el).onclick = (e) => busy(e.currentTarget, async () => { const f = formData($('#uf', m.el)); await ctx.api.rpc('api_user_save', { id: u.id, ...f, site_id: f.site_id ? Number(f.site_id) : null }); m.close(); toast('บันทึกสิทธิ์แล้ว', 'ok'); rerender(); });
+    const del = $('#del', m.el);
+    if (del) del.onclick = async () => {
+      const ok = await confirmBox('ลบบัญชีผู้ใช้', `ลบ ${esc(u.display_name || u.email)} ออกจากระบบ · ถ้าคนนี้ล็อกอินอีกครั้งจะกลับมาเป็น "รอกำหนดสิทธิ์" (ต้องให้ Admin อนุมัติใหม่)`, { ok: 'ลบบัญชี', danger: true });
+      if (!ok) return;
+      try { await ctx.api.rpc('api_user_delete', { id: u.id }); m.close(); toast('ลบบัญชีแล้ว', 'ok'); rerender(); } catch (e) { toast(e.message, 'err'); }
+    };
   }));
 }
 
 async function audit(el, ctx) {
   const rows = await ctx.api.rpc('api_audit', { limit: 300 });
-  const A = { create: 'สร้าง', update: 'แก้ไข', confirm: 'ยืนยัน', cancel: 'ยกเลิก', reverse: 'กลับรายการ', ship: 'ยืนยันตีออก', receive: 'ยืนยันรับ', resolve: 'ปิดส่วนต่าง', approve: 'อนุมัติ', reject: 'ไม่อนุมัติ', signup: 'สมัคร' };
+  const A = { create: 'สร้าง', update: 'แก้ไข', confirm: 'ยืนยัน', cancel: 'ยกเลิก', reverse: 'กลับรายการ', ship: 'ยืนยันตีออก', receive: 'ยืนยันรับ', resolve: 'ปิดส่วนต่าง', approve: 'อนุมัติ', reject: 'ไม่อนุมัติ', signup: 'สมัคร', delete: 'ลบ' };
   el.innerHTML = `<div class="card">${table([{ label: 'เวลา', render: (a) => thDateTime(a.at) }, { label: 'ผู้ทำ', render: (a) => esc(a.actor || '-') }, { label: 'การกระทำ', render: (a) => esc(A[a.action] || a.action) },
     { label: 'ข้อมูล', render: (a) => `${esc(a.entity)} #${esc(a.entity_id)}` }, { label: 'รายละเอียด', render: (a) => `<span class="small muted">${esc(a.data ? JSON.stringify(a.data).slice(0, 120) : '')}</span>` }], rows, { empty: 'ยังไม่มีประวัติ' })}</div>`;
 }

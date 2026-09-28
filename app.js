@@ -32,7 +32,7 @@ function buildCan(u) {
     approveAt: (sid) => ['admin', 'executive'].includes(r) || (u.is_manager && canAct(sid)),
     sales: is('sales', 'executive'), invoices: is('sales', 'executive', 'warehouse'), prices: is('executive'),
     settings: r === 'admin', master: r === 'admin' || (r === 'warehouse' && u.is_manager),
-    suppliers: is('warehouse', 'executive'), customers: is('sales', 'executive'),
+    suppliers: is('warehouse', 'executive'), customers: is('sales', 'executive'), addCustomer: is('sales', 'executive', 'warehouse'),
     seeWarehouse: r !== 'branch', recordDelivery: is('warehouse', 'sales'),
     returns: is('sales', 'warehouse', 'branch', 'executive'), credit: is('sales', 'executive'), stocktake: is('warehouse', 'branch'),
   };

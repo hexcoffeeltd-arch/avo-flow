@@ -2,7 +2,7 @@
 // เอกสารและหน้าต่างที่ใช้ร่วมกันทุกหน้า: Lot trace, ใบรับเข้า, ใบตีออก/โอน,
 // รับปลายทาง, ส่วนต่าง, ความสุก, งานสาขา (โอนภายใน/แช่แข็ง/ขาย/ตัดทิ้ง)
 // =====================================================================
-import { $, $$, esc, fmtN, fmtKg, fmtMoney, thDate, thDateY, thDateTime, toLocalInput, fromLocalInput, ripBadge, statusBadge, RIP, RIP_ORDER, ZONE, ROLE, CHANNEL,
+import { $, $$, esc, fmtN, fmtKg, fmtMoney, thDate, thDateY, thDateTime, todayISO, toLocalInput, fromLocalInput, ripBadge, statusBadge, RIP, RIP_ORDER, ZONE, ROLE, CHANNEL,
   openModal, openDrawer, confirmBox, toast, busy, opt, field, table, photoField, bindPhotoFields, showEvidence, formData, ADJ_KIND, pcs, fmtPcs, ICONS } from './ui.js';
 import { qrSvg } from './qr.js';
 
@@ -93,15 +93,18 @@ export function receiptForm(ctx, existing = null) {
   const whs = M.sites.filter((s) => s.kind === 'warehouse' && s.active && ctx.can.actAt(s.id));
   const sups = M.suppliers.filter((s) => s.active || s.id === r?.supplier_id);
   const std = Number(M.settings?.thresholds?.std_basket_kg || 20);
-  let lines = r ? r.lines.map((l) => ({ id: l.id, variety_id: l.variety_id, size_id: l.size_id, ripeness: l.ripeness, baskets: l.baskets, gross_kg: l.is_estimated ? '' : l.gross_kg, tare_kg: l.is_estimated ? '' : l.tare_kg, unit_cost: l.unit_cost, lot_code: l.lot_code, estimated: l.is_estimated, pieces: l.pieces ?? '' }))
-    : [{ variety_id: M.varieties[0]?.id, size_id: '', ripeness: 'raw', baskets: '', gross_kg: '', tare_kg: '', unit_cost: '', estimated: false, pieces: '' }];
+  let tarePer = Number(M.settings?.thresholds?.basket_tare_kg ?? 1.5);
+  let lines = r ? r.lines.map((l) => ({ tareAuto: false, id: l.id, variety_id: l.variety_id, size_id: l.size_id, ripeness: l.ripeness, baskets: l.baskets, gross_kg: l.is_estimated ? '' : l.gross_kg, tare_kg: l.is_estimated ? '' : l.tare_kg, unit_cost: l.unit_cost, lot_code: l.lot_code, estimated: l.is_estimated, pieces: l.pieces ?? '' }))
+    : [{ tareAuto: true, variety_id: M.varieties[0]?.id, size_id: '', ripeness: 'raw', baskets: '', gross_kg: '', tare_kg: '', unit_cost: '', estimated: false, pieces: '' }];
+  const autoTare = (l) => { if (l.tareAuto && !l.estimated) l.tare_kg = Number(l.baskets) > 0 && tarePer > 0 ? String(Math.round(Number(l.baskets) * tarePer * 100) / 100) : ''; };
   const m = openModal({ title: r ? `แก้ไขใบรับเข้า ${esc(r.doc_no)}` : 'รับเข้าสินค้าจากสวน', sub: 'ยึดน้ำหนักชั่งจริง (สุทธิ = น้ำหนักรวม − น้ำหนักตะกร้า) · สต็อกจะเพิ่มเมื่อยืนยันตรวจรับเท่านั้น', size: 'xl',
     body: `<div class="form-grid g4" id="rh">
         ${field('สวน / แหล่งที่มา', `<select class="input" name="supplier_id">${opt(sups, r?.supplier_id, (x) => x.name, (x) => x.id, '— เลือกสวน —')}</select>`, { req: true, hint: ctx.can.suppliers ? '<button class="link" id="add-sup" type="button">+ เพิ่มสวนใหม่</button>' : '' })}
         ${field('วันเวลารับจริง', `<input class="input" type="datetime-local" name="received_at" value="${toLocalInput(r?.received_at)}">`, { req: true })}
         ${field('คลังที่รับ', `<select class="input" name="site_id">${opt(whs, r?.site_id ?? ctx.me.site_id ?? whs[0]?.id)}</select>`)}
-        ${photoField('evidence', 'ใบชั่ง / รูปสินค้า (แนะนำ)')}
-        ${field('หมายเหตุ', `<input class="input" name="note" value="${esc(r?.note || '')}">`, { cls: 'span-all' })}
+        ${field('น้ำหนักตะกร้าเปล่า (กก./ใบ)', `<input class="input" type="number" min="0" step="0.01" inputmode="decimal" id="tare-per" value="${esc(tarePer)}">`, { hint: 'น้ำหนักตะกร้า = จำนวนตะกร้า × ค่านี้ (แก้รายบรรทัดได้)' })}
+        ${field('หมายเหตุ', `<input class="input" name="note" value="${esc(r?.note || '')}">`, { cls: 'span-2' })}
+        <div class="span-all">${photoField('evidence', 'ใบชั่ง / รูปสินค้า (แนะนำ)', false, r?.evidence || '')}</div>
       </div>
       <div class="section-title">รายการสินค้า <span class="muted small">(แต่ละบรรทัด = 1 Lot ใหม่ · แยก Lot ทุกรอบรับ)</span></div>
       <div id="rl"></div>
@@ -119,7 +122,7 @@ export function receiptForm(ctx, existing = null) {
       { label: 'ตะกร้า', render: (l, i) => `<input class="input num" type="number" min="0" step="1" inputmode="numeric" data-i="${i}" data-k="baskets" value="${esc(l.baskets)}" style="width:80px">` },
       { label: 'ยังไม่ชั่ง', render: (l, i) => `<label class="check" title="ประมาณจากจำนวนตะกร้า × ${std} กก. แล้วค่อยชั่งจริงตอนตรวจรับ"><input type="checkbox" data-i="${i}" data-k="estimated" ${l.estimated ? 'checked' : ''}> ประมาณ</label>` },
       { label: 'น้ำหนักรวม (กก.)', render: (l, i) => `<input class="input num" type="number" min="0" step="0.01" inputmode="decimal" data-i="${i}" data-k="gross_kg" value="${esc(l.gross_kg)}" style="width:110px" ${l.estimated ? 'disabled placeholder="ชั่งตอนตรวจรับ"' : ''}>` },
-      { label: 'น้ำหนักตะกร้า (กก.)', render: (l, i) => `<input class="input num" type="number" min="0" step="0.01" inputmode="decimal" data-i="${i}" data-k="tare_kg" value="${esc(l.tare_kg)}" style="width:110px" ${l.estimated ? 'disabled' : ''}>` },
+      { label: 'น้ำหนักตะกร้า (กก.)', render: (l, i) => `<input class="input num" type="number" min="0" step="0.01" inputmode="decimal" data-i="${i}" data-k="tare_kg" value="${esc(l.tare_kg)}" style="width:110px" ${l.estimated ? 'disabled' : ''}>${!l.estimated && l.tareAuto && Number(l.baskets) > 0 ? `<div class="small muted" data-tare-hint>${fmtN(l.baskets)} × ${fmtN(tarePer)}</div>` : '<div class="small muted" data-tare-hint></div>'}` },
       { label: 'สุทธิ (กก.)', right: true, render: (l) => `<b data-net>${netOf(l) ? fmtN(netOf(l)) : '—'}</b>${l.estimated ? '<div class="small muted">ประมาณ</div>' : ''}` },
       { label: 'จำนวนลูก', render: (l, i) => `<input class="input num" type="number" min="1" step="1" inputmode="numeric" data-i="${i}" data-k="pieces" value="${esc(l.pieces)}" style="width:86px" placeholder="ถ้านับ">` },
       { label: 'ราคาซื้อ/กก.', render: (l, i) => `<input class="input num" type="number" min="0" step="0.01" inputmode="decimal" data-i="${i}" data-k="unit_cost" value="${esc(l.unit_cost)}" style="width:96px">` },
@@ -129,7 +132,11 @@ export function receiptForm(ctx, existing = null) {
     $$('#rl [data-k]', m.el).forEach((el) => (el.oninput = el.onchange = () => { const l = lines[el.dataset.i]; const k = el.dataset.k;
       l[k] = el.type === 'checkbox' ? el.checked : el.value;
       if (k === 'estimated') { draw(); return; }
-      if (['gross_kg', 'tare_kg', 'baskets'].includes(k)) { const tr = el.closest('tr'); $('[data-net]', tr).textContent = netOf(l) ? fmtN(netOf(l)) : '—'; } sum(); }));
+      if (k === 'tare_kg') l.tareAuto = el.value === '';
+      const tr = el.closest('tr');
+      if (k === 'baskets' && l.tareAuto) { autoTare(l); const t = $('[data-k="tare_kg"]', tr); if (t) t.value = l.tare_kg;
+        const h = $('[data-tare-hint]', tr); if (h) h.textContent = Number(l.baskets) > 0 && tarePer > 0 ? `${fmtN(l.baskets)} × ${fmtN(tarePer)}` : ''; }
+      if (['gross_kg', 'tare_kg', 'baskets'].includes(k)) $('[data-net]', tr).textContent = netOf(l) ? fmtN(netOf(l)) : '—'; sum(); }));
     $$('#rl [data-del]', m.el).forEach((b) => (b.onclick = () => { lines.splice(Number(b.dataset.del), 1); draw(); }));
     sum();
   };
@@ -141,7 +148,8 @@ export function receiptForm(ctx, existing = null) {
       ${warn.length ? `<div class="small" style="color:var(--warn-ink);margin-top:6px">⚠ น้ำหนักชั่งจริงต่างจากค่ามาตรฐาน ${std} กก./ตะกร้า เกินเกณฑ์ — ระบบยึดน้ำหนักชั่งจริง ตรวจสอบอีกครั้งก่อนบันทึก</div>` : ''}`;
   };
   supSel.onchange = () => { const s = M.suppliers.find((x) => x.id === Number(supSel.value)); if (s?.buy_price) { lines.forEach((l) => { if (!l.unit_cost) l.unit_cost = s.buy_price; }); draw(); } };
-  $('#add-line', m.el).onclick = () => { const last = lines[lines.length - 1] || {}; lines.push({ variety_id: last.variety_id, size_id: '', ripeness: last.ripeness || 'raw', baskets: '', gross_kg: '', tare_kg: '', unit_cost: last.unit_cost || '', estimated: !!last.estimated, pieces: '' }); draw(); };
+  $('#add-line', m.el).onclick = () => { const last = lines[lines.length - 1] || {}; lines.push({ tareAuto: true, variety_id: last.variety_id, size_id: '', ripeness: last.ripeness || 'raw', baskets: '', gross_kg: '', tare_kg: '', unit_cost: last.unit_cost || '', estimated: !!last.estimated, pieces: '' }); draw(); };
+  $('#tare-per', m.el).oninput = (e) => { tarePer = Number(e.target.value || 0); lines.forEach(autoTare); draw(); };
   const addSup = $('#add-sup', m.el); if (addSup) addSup.onclick = () => supplierForm(ctx, null, async (s) => { await ctx.reloadMe(); supSel.innerHTML = opt(ctx.master.suppliers.filter((x) => x.active), s.id, (x) => x.name, (x) => x.id, '— เลือกสวน —'); M.suppliers = ctx.master.suppliers; supSel.onchange(); });
   const save = (submit) => async (e) => busy(e.currentTarget, async () => {
     const h = formData($('#rh', m.el));
@@ -188,6 +196,8 @@ export async function receiptView(ctx, id) {
   const recalc = (id) => { const l = r.lines.find((x) => x.id === id); const rej = $(`[data-rej="${id}"]`, m.el); $(`[data-acc="${id}"]`, m.el).textContent = fmtN(netNow(l) - Number(rej?.value || 0));
     const nv = $(`[data-netv="${id}"]`, m.el); if (nv && $(`[data-gross="${id}"]`, m.el).value) nv.textContent = fmtN(netNow(l)); };
   $$('[data-rej]', m.el).forEach((inp) => (inp.oninput = () => recalc(Number(inp.dataset.rej))));
+  const tarePer = Number(ctx.master.settings?.thresholds?.basket_tare_kg ?? 1.5);
+  r.lines.forEach((l) => { const t = $(`[data-tare="${l.id}"]`, m.el); if (t && Number(l.baskets) > 0 && tarePer > 0) { t.value = Math.round(Number(l.baskets) * tarePer * 100) / 100; t.title = `${l.baskets} ตะกร้า × ${tarePer} กก.`; } });
   $$('[data-gross],[data-tare]', m.el).forEach((inp) => (inp.oninput = () => recalc(Number(inp.dataset.gross || inp.dataset.tare))));
   $$('[data-lot]', m.el).forEach((tr) => (tr.onclick = () => lotTrace(ctx, Number(tr.dataset.lot))));
   const b = (sel, fn) => { const el = $(sel, m.el); if (el) el.onclick = fn; };
@@ -249,12 +259,16 @@ export async function dispatchForm(ctx, opts = {}) {
     kind: ex?.kind || opts.kind || 'transfer', from: ex?.from_site_id || opts.from_site_id || fromSites[0].id, fromZone: ex?.from_zone || opts.from_zone || null,
     to: ex?.to_site_id || opts.to_site_id || null, cust: ex?.customer_id || opts.customer_id || null,
     picks: {}, // key lot|rip → {kg, baskets, bags}
+    date: ex?.doc_date || todayISO(),
   };
   if (ex) ex.lines.forEach((l) => { st.picks[l.lot_id + '|' + l.ripeness] = { kg: l.kg, baskets: l.baskets, bags: l.bags, pieces: l.pieces }; });
   if (opts.preset) opts.preset.forEach((l) => { st.picks[l.lot_id + '|' + l.ripeness] = { kg: l.kg, baskets: l.baskets || 0, bags: l.bags || 0 }; });
   const m = openModal({ title: ex ? `แก้ไข ${esc(ex.doc_no)}` : 'สร้างใบตีออก / ใบโอน', sub: 'เลือก Lot จากรายการที่ระบบแนะนำ (สุกก่อน → รับเข้าก่อน) · ห้ามจ่ายเกินยอดพร้อมใช้', size: 'xl',
     body: `<div class="seg" id="kind"><button data-k="transfer">โอนไปสาขา / คลัง</button><button data-k="sale">ขาย / ส่งลูกค้า · DC · ONLINE · TIKTOK</button></div>
       <div class="form-grid g4" id="dh"></div>
+      <div class="form-grid g4" id="dx" style="margin-top:4px">
+        ${field('วันที่ตีออก', `<input class="input" type="date" name="doc_date" value="${esc(ex?.doc_date || todayISO())}">`, { req: true })}
+        <div class="span-all">${photoField('ship_evidence', 'รูปสินค้าก่อนส่ง / ใบส่งของ', false, ex?.ship_evidence || '')}</div></div>
       <div class="section-title" style="display:flex;justify-content:space-between;align-items:center;gap:8px;flex-wrap:wrap"><span>เลือก Lot ที่จะจ่าย</span>
         <span class="actions"><input class="input" id="need" type="number" min="0" step="0.01" placeholder="ต้องการ (กก.)" style="width:150px;height:34px">
         <select class="input" id="f-var" style="width:140px;height:34px">${opt(M.varieties, '', (x) => x.name, (x) => x.id, 'ทุกสายพันธุ์')}</select>
@@ -271,8 +285,10 @@ export async function dispatchForm(ctx, opts = {}) {
     $('#dh', m.el).innerHTML = `
       ${field('ต้นทาง', `<select class="input" name="from_site_id">${opt(fromSites, st.from)}</select>`, { req: true })}
       ${field('จุดจัดเก็บต้นทาง', `<select class="input" name="from_zone">${zones.map((z) => `<option value="${z}" ${z === st.fromZone ? 'selected' : ''}>${ZONE[z]}</option>`).join('')}</select>`)}
-      ${isSale ? field('ลูกค้า / ช่องทาง', `<select class="input" name="customer_id">${opt(M.customers.filter((c) => c.active), st.cust, (c) => `${c.name} (${CHANNEL[c.channel] || c.channel})`, (c) => c.id, '— เลือกลูกค้า —')}</select>`, { req: true })
-        : field('ปลายทาง (สาขา/คลัง)', `<select class="input" name="to_site_id">${opt(M.sites.filter((s) => s.active && s.id !== Number(st.from)), st.to, (s) => s.name, (s) => s.id, '— เลือกปลายทาง —')}</select>`, { req: true })}
+      ${isSale ? field('ลูกค้า / ช่องทาง', `<select class="input" name="customer_id">${opt(M.customers.filter((c) => c.active), st.cust, (c) => `${c.name} (${CHANNEL[c.channel] || c.channel})`, (c) => c.id, '— เลือกลูกค้า —')}</select>`,
+          { req: true, hint: ctx.can.addCustomer ? '<button class="link" id="add-cust" type="button">+ เพิ่มลูกค้าใหม่</button>' : 'ไม่มีในรายการ → ให้ฝ่ายขายเพิ่มลูกค้า' })
+        : field('ปลายทาง (สาขา/คลัง)', `<select class="input" name="to_site_id">${opt(M.sites.filter((s) => s.active && s.id !== Number(st.from)), st.to, (s) => s.name, (s) => s.id, '— เลือกปลายทาง —')}</select>`,
+          { req: true, hint: ctx.can.settings ? '<a class="link" href="#/settings/master">+ เพิ่มสาขา / คลัง</a>' : 'ไม่มีในรายการ → ให้ Admin เพิ่มสาขาที่ ตั้งค่า' })}
       ${field('ผู้ขนส่ง', `<input class="input" name="carrier" value="${esc(ex?.carrier || '')}" placeholder="เช่น รถบริษัท / Kerry Cool">`)}
       ${field('ทะเบียนรถ / เลขพัสดุ', `<input class="input" name="vehicle" value="${esc(ex?.vehicle || '')}">`)}
       ${field('ผู้แพ็ค / ผู้จ่าย', `<input class="input" name="packer" value="${esc(ex?.packer || ctx.me.display_name || '')}">`)}
@@ -281,6 +297,8 @@ export async function dispatchForm(ctx, opts = {}) {
     $('[name=from_zone]', m.el).onchange = (e) => { st.fromZone = e.target.value; st.picks = {}; loadLots(); };
     const ts = $('[name=to_site_id]', m.el); if (ts) ts.onchange = (e) => { st.to = e.target.value; };
     const cs = $('[name=customer_id]', m.el); if (cs) cs.onchange = (e) => { st.cust = e.target.value; };
+    const ac = $('#add-cust', m.el); if (ac) ac.onclick = async () => (await import('./salesdocs.js')).customerForm(ctx, null, (c) => { st.cust = c.id; M.customers = ctx.master.customers; header(); });
+    const al = $('#dh a.link', m.el); if (al) al.onclick = () => m.close();
     const approver = ctx.can.approveAt(st.from); const sb = $('#ship', m.el); sb.classList.toggle('hidden', !approver);
   };
   const loadLots = async () => {
@@ -310,9 +328,14 @@ export async function dispatchForm(ctx, opts = {}) {
       $(`[data-after="${key}"]`, m.el).textContent = fmtN(a.available_kg - kg); $(`[data-key="${key}"]`, m.el).checked = kg > 0;
       $(`[data-after="${key}"]`, m.el).style.color = kg > a.available_kg ? 'var(--red)' : ''; sum();
     };
-    $$('[data-kg], [data-bk]', m.el).forEach((i) => (i.oninput = () => { if (i.dataset.kg) { const pc = $(`[data-pc="${i.dataset.kg}"]`, m.el); if (pc) pc.value = ''; } upd(i.dataset.kg || i.dataset.bk); }));
+    // กรอก กก. แล้วเติมจำนวนตะกร้า/ถุงตามสัดส่วนให้ (จ่ายหมด = ตะกร้าทั้งหมด) · แก้เองได้
+    const autoBk = (key) => { const a = avail.find((x) => x.lot_id + '|' + x.ripeness === key); const bkI = $(`[data-bk="${key}"]`, m.el); if (!a || !bkI || bkI.dataset.manual) return;
+      const kg = Number($(`[data-kg="${key}"]`, m.el).value || 0); const have = Number(frozen ? a.bags : a.baskets); const base = Number(a.available_kg);
+      bkI.value = kg <= 0 ? '' : kg >= base ? have : Math.min(have, Math.round(have * kg / Math.max(Number(a.kg), base))); };
+    $$('[data-bk]', m.el).forEach((i) => (i.onchange = () => { i.dataset.manual = i.value === '' ? '' : '1'; if (!i.dataset.manual) delete i.dataset.manual; }));
+    $$('[data-kg], [data-bk]', m.el).forEach((i) => (i.oninput = () => { if (i.dataset.kg) { const pc = $(`[data-pc="${i.dataset.kg}"]`, m.el); if (pc) pc.value = ''; autoBk(i.dataset.kg); } upd(i.dataset.kg || i.dataset.bk); }));
     $$('[data-pc]', m.el).forEach((i) => (i.oninput = () => { const key = i.dataset.pc; const a = avail.find((x) => x.lot_id + '|' + x.ripeness === key);
-      if (a?.avg_g && i.value) $(`[data-kg="${key}"]`, m.el).value = Math.round(Number(i.value) * Number(a.avg_g) / 10) / 100; upd(key); }));
+      if (a?.avg_g && i.value) $(`[data-kg="${key}"]`, m.el).value = Math.round(Number(i.value) * Number(a.avg_g) / 10) / 100; autoBk(key); upd(key); }));
     $$('.pick', m.el).forEach((c) => (c.onchange = () => { const key = c.dataset.key; const a = avail.find((x) => x.lot_id + '|' + x.ripeness === key);
       $(`[data-kg="${key}"]`, m.el).value = c.checked ? a.available_kg : ''; $(`[data-bk="${key}"]`, m.el).value = c.checked ? (frozen ? a.bags : a.baskets) : ''; upd(key); }));
     sum();
@@ -334,12 +357,13 @@ export async function dispatchForm(ctx, opts = {}) {
     drawLots();
   };
   const save = (ship) => (e) => busy(e.currentTarget, async () => {
-    const h = formData($('#dh', m.el));
+    const h = { ...formData($('#dh', m.el)), ...formData($('#dx', m.el)) };
     const lines = Object.entries(st.picks).map(([k, v]) => { const [lot_id, ripeness] = k.split('|'); return { lot_id: Number(lot_id), ripeness, kg: v.kg, baskets: v.baskets || 0, bags: v.bags || 0, pieces: v.pieces || null }; });
     const res = await ctx.api.rpc('api_dispatch_save', { id: ex?.id, kind: st.kind, ...h, ship, lines });
     m.close(); done(ctx, ship ? `ตีออก ${res.doc_no} แล้ว · ${fmtKg(res.total_kg)} อยู่ระหว่างทาง` : `บันทึกร่าง ${res.doc_no} · จองสต็อกแล้ว`); dispatchView(ctx, res.id);
   });
   $('#save', m.el).onclick = save(false); $('#ship', m.el).onclick = save(true);
+  bindPhotoFields($('#dx', m.el), ctx.api);
   header(); loadLots();
 }
 
@@ -357,6 +381,7 @@ export async function dispatchView(ctx, id) {
     body: `<div class="print-area">
       <div class="actions" style="margin-bottom:12px;align-items:center">${statusBadge('dispatch', d.status)}${d.open_cases ? ` <span class="badge b-warn">รอตรวจสอบส่วนต่าง ${d.open_cases} รายการ</span>` : ''}</div>
       <div class="form-grid g4" style="margin-bottom:14px">
+        <div class="kv"><span>วันที่ตีออก</span><span>${d.doc_date ? thDateY(d.doc_date) : thDate(d.created_at)}</span></div>
         <div class="kv"><span>ผู้สร้าง</span><span>${esc(d.created_by_name || '-')}</span></div>
         <div class="kv"><span>ผู้ยืนยันจ่าย</span><span>${esc(d.shipped_by_name || '—')}${d.shipped_at ? '<br><span class="small muted">' + thDateTime(d.shipped_at) + '</span>' : ''}</span></div>
         <div class="kv"><span>ผู้ขนส่ง</span><span>${esc(d.carrier || '—')}${d.vehicle ? '<br><span class="small muted">' + esc(d.vehicle) + '</span>' : ''}</span></div>
@@ -390,6 +415,7 @@ export async function dispatchView(ctx, id) {
         { label: '', render: (c) => (c.status === 'open' && approverCase ? `<button class="btn sm" data-case="${c.id}">สรุปส่วนต่าง</button>` : '') }], d.cases)}` : ''}
       ${rets.length ? `<div class="section-title">รับคืน / เคลมจากลูกค้า</div>${table([{ label: 'เลขที่', key: 'doc_no' }, { label: 'วันที่', render: (x) => thDateTime(x.requested_at) },
         { label: 'กก.', right: true, render: (x) => fmtN(x.total_kg) }, { label: 'เหตุผล', render: (x) => esc(x.reason) }, { label: 'สถานะ', right: true, render: (x) => statusBadge('return', x.status) }], rets, { rowAttr: (x) => `class="click" data-ret="${x.id}"` })}` : ''}
+      ${d.ship_evidence ? '<div class="section-title">รูปตอนส่ง</div><div id="ev-ship"></div>' : ''}
       ${d.evidence ? '<div class="section-title">หลักฐานรับปลายทาง</div><div id="ev"></div>' : ''}`,
     foot: `<div class="left">${canEdit ? '<button class="btn" id="edit">แก้ไข</button><button class="btn danger" id="cancel">ยกเลิกใบ</button>' : ''}<button class="btn" onclick="window.print()">พิมพ์ใบส่งของ</button></div>
       ${canReturn ? '<button class="btn" id="ret">รับคืน / เคลม</button>' : ''}
@@ -397,6 +423,7 @@ export async function dispatchView(ctx, id) {
       ${canShip ? '<button class="btn primary" id="ship">ยืนยันตีออก · ส่งแล้ว</button>' : ''}
       ${canReceive ? '<button class="btn primary" id="receive">ยืนยันรับ</button>' : ''}` });
   if (d.evidence) showEvidence($('#ev', m.el), d.evidence, ctx.api);
+  if (d.ship_evidence) showEvidence($('#ev-ship', m.el), d.ship_evidence, ctx.api);
   bindPhotoFields(m.el, ctx.api);
   $$('[data-rk]', m.el).forEach((i) => (i.oninput = () => { const l = d.lines.find((x) => x.id === Number(i.dataset.rk)); const v = $(`[data-var="${l.id}"]`, m.el); const diff = Number(l.kg) - Number(i.value || 0); v.textContent = diff > 0 ? '−' + fmtN(diff) : '0'; v.style.color = diff > 0 ? 'var(--warn-ink)' : ''; }));
   $$('tr[data-lot]', m.el).forEach((tr) => { if (!canReceive) { tr.classList.add('click'); tr.onclick = () => lotTrace(ctx, Number(tr.dataset.lot)); } });
