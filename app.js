@@ -2,7 +2,7 @@
 // AVO FLOW — โครงหน้าจอหลัก: เข้าสู่ระบบ, เมนู, เส้นทางหน้า, สิทธิ์, ออฟไลน์
 // =====================================================================
 import { CONFIG } from './config.js';
-import { createApi, AppError } from './api.js';
+import { createApi, AppError, ssoRead } from './api.js';
 import { $, $$, esc, toast, ICONS, ROLE, thDateY, busy, field } from './ui.js';
 import * as docs from './docs.js';
 
@@ -148,7 +148,22 @@ function otherAppsNav() {
   const to = (app) => hr + (app ? (hr.includes('?') ? '&' : '?') + 'app=' + app : '');
   return `<div class="nav-group">ระบบอื่น</div>` +
     `<a href="${esc(to(''))}" class="nav-ext">${OTHER_ICONS.hr}<span>HR.SPOT</span></a>` +
-    `<a href="${esc(to('equipment'))}" class="nav-ext">${OTHER_ICONS.eq}<span>ระบบบริหารอุปกรณ์</span></a>`;
+    `<a href="${esc(to('equipment'))}" class="nav-ext" data-sso-app="equipment">${OTHER_ICONS.eq}<span>ระบบบริหารอุปกรณ์</span></a>`;
+}
+/* เข้าด้วยบัญชี HR.SPOT อยู่: ขอบัตรผ่านของระบบอุปกรณ์จาก HR.SPOT แล้วไปที่ระบบนั้นเลย (ไม่ต้องผ่านหน้า "ไปที่ …")
+ * ถ้าขอไม่ได้ (บัตรหมดอายุ ไม่มีเน็ต ฯลฯ) ใช้ลิงก์ปกติ ซึ่งพาไปหน้าล็อกอินกลาง */
+function bindOtherApps() {
+  $$('a[data-sso-app]').forEach((a) => a.addEventListener('click', async (e) => {
+    const sso = ssoRead(); const hr = String(CONFIG.neon?.hrspotUrl || '');
+    if (!sso || !hr || a.dataset.busy) return; // ไม่มีบัตร HR.SPOT → ลิงก์ปกติ
+    e.preventDefault(); a.dataset.busy = '1';
+    const fallback = a.href; toast('กำลังเปิดระบบบริหารอุปกรณ์…');
+    try {
+      const r = await fetch(hr + (hr.includes('?') ? '&' : '?') + 'op=sso', { method: 'POST', headers: { 'Content-Type': 'text/plain;charset=utf-8' }, body: JSON.stringify({ app: a.dataset.ssoApp, jwt: sso.token }) });
+      const d = await r.json();
+      location.href = d && d.ok && /^https:\/\//.test(d.url) ? d.url : fallback;
+    } catch (err) { location.href = fallback; }
+  }));
 }
 
 function renderShell() {
@@ -179,6 +194,7 @@ function renderShell() {
   $('#bell').onclick = () => go('alerts');
   $('#me-btn').onclick = () => docs.userMenu(ctx);
   $('#net-pill').onclick = () => docs.outboxModal(ctx);
+  bindOtherApps();
   updateNetPill();
 }
 
