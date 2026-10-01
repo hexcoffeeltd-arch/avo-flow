@@ -60,6 +60,52 @@ async function demoApi() {
 // ---------------------------------------------------------------------
 // NEON (Data API + Neon Auth) — ใช้งานจริง
 // ---------------------------------------------------------------------
+// ---------------------------------------------------------------------
+// ล็อกอินกลาง HR.SPOT — HR.SPOT ออกบัตร (JWT, ลงลายเซ็น RS256) ใส่ในลิงก์ #sso=… ฐานข้อมูลตรวจบัตรเองผ่าน JWKS
+// ---------------------------------------------------------------------
+const SSO_KEY = 'avoflow-sso';
+const b64urlJson = (part) => { const s = part.replace(/-/g, '+').replace(/_/g, '/'); return JSON.parse(decodeURIComponent(escape(atob(s + '='.repeat((4 - (s.length % 4)) % 4))))); };
+function ssoClear() { try { localStorage.removeItem(SSO_KEY); } catch (e) { /* ignore */ } }
+// อ่านบัตรที่เก็บไว้ ถ้าหมดอายุ (เหลือไม่ถึง 30 วินาที) ให้ทิ้ง
+export function ssoRead() {
+  try {
+    const t = localStorage.getItem(SSO_KEY); if (!t) return null;
+    const c = b64urlJson(t.split('.')[1]);
+    if (!c || !c.sub || !(Number(c.exp) * 1000 > Date.now() + 30000)) { ssoClear(); return null; }
+    return { token: t, claims: c };
+  } catch (e) { ssoClear(); return null; }
+}
+// หน้าเว็บถูกเปิดด้วย …/avo-flow/#sso=<บัตร> → เก็บบัตร แล้วเปลี่ยน URL เป็นหน้าแดชบอร์ด (บัตรไม่ค้างในแถบที่อยู่)
+export function ssoCapture() {
+  const m = /^#sso=([A-Za-z0-9_-]+\.[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+)$/.exec(location.hash || ''); if (!m) return false;
+  try { b64urlJson(m[1].split('.')[1]); localStorage.setItem(SSO_KEY, m[1]); } catch (e) { return false; }
+  try { history.replaceState(null, '', location.pathname + location.search + '#/dashboard'); } catch (e) { /* ignore */ }
+  return true;
+}
+function ssoApi() {
+  const cfg = CONFIG.neon;
+  return {
+    mode: 'neon', sso: true,
+    async rpc(fn, p = {}) {
+      const s = ssoRead(); if (!s) throw new AppError('เซสชันหมดอายุ กรุณาเข้าสู่ระบบใหม่');
+      let r;
+      try { r = await fetch(`${cfg.dataApiUrl}/rpc/${fn}`, { method: 'POST', headers: { 'Content-Type': 'application/json', Authorization: 'Bearer ' + s.token }, body: JSON.stringify({ p }) }); }
+      catch (e) { throw new AppError(cleanMessage(e)); }
+      const body = await r.json().catch(() => null);
+      if (r.status === 401) { ssoClear(); throw new AppError('เซสชันหมดอายุ กรุณาเข้าสู่ระบบใหม่'); }
+      if (!r.ok) throw new AppError(cleanMessage(body || { message: 'HTTP ' + r.status }));
+      return body;
+    },
+    auth: {
+      allowSignup: false, canReset: false,
+      async getSession() { const s = ssoRead(); return s ? { email: null, name: s.claims.name || null } : null; },
+      async signIn() { throw new AppError('บัญชีนี้เข้าผ่าน HR.SPOT'); },
+      async signUp() { throw new AppError('สมัครเองไม่ได้ ใช้บัญชี HR.SPOT'); },
+      async signOut() { ssoClear(); },
+    },
+  };
+}
+
 async function neonApi() {
   const cfg = CONFIG.neon;
   if (!cfg.authUrl || !cfg.dataApiUrl) throw new AppError('ยังไม่ได้ตั้งค่า Neon ใน assets/js/config.js (authUrl และ dataApiUrl)');
@@ -153,7 +199,7 @@ async function localApi() {
 }
 
 export async function createApi() {
-  if (CONFIG.backend === 'neon') return wrapOffline(await neonApi(), AppError);
+  if (CONFIG.backend === 'neon') { ssoCapture(); if (ssoRead()) return wrapOffline(ssoApi(), AppError); return wrapOffline(await neonApi(), AppError); }
   if (CONFIG.backend === 'supabase') return wrapOffline(await supabaseApi(), AppError);
   if (CONFIG.backend === 'local') return wrapOffline(await localApi(), AppError);
   return demoApi();
