@@ -55,16 +55,19 @@ function showDemoLogin() {
 
 function showLogin(mode = 'in', msg = '', info = '') {
   const up = mode === 'up';
+  const hr = CONFIG.neon?.hrspotUrl ? CONFIG.neon.hrspotUrl + (CONFIG.neon.hrspotUrl.includes('?') ? '&' : '?') + 'app=avoflow' : '';
+  const pw = CONFIG.neon?.passwordLogin !== false;
   authShell(`<h2 style="font-size:18px;font-weight:500;text-align:center;margin:4px 0 16px">${up ? 'สมัครบัญชีผู้ใช้' : 'เข้าสู่ระบบ'}</h2>
     ${msg ? `<div class="notice">${esc(msg)}</div>` : ''}${info ? `<div class="notice info">${esc(info)}</div>` : ''}
-    <form id="auth-form" class="grid">
+    ${hr && !up ? `<a class="btn primary" href="${esc(hr)}" style="display:block;text-align:center;text-decoration:none">เข้าสู่ระบบด้วยบัญชี HR.SPOT</a>${pw ? '<p class="small muted" style="text-align:center;margin:12px 0">หรือใช้อีเมลเดิม</p>' : ''}` : ''}
+    <form id="auth-form" class="grid" ${hr && !pw ? 'hidden' : ''}>
       ${up ? field('ชื่อที่แสดง', '<input class="input" name="name" required autocomplete="name">', { req: true }) : ''}
       ${field('อีเมล', '<input class="input" name="email" type="email" required autocomplete="email">', { req: true })}
       ${field('รหัสผ่าน', `<input class="input" name="password" type="password" required minlength="8" autocomplete="${up ? 'new-password' : 'current-password'}">`, { req: true, hint: up ? 'อย่างน้อย 8 ตัวอักษร' : '' })}
       <button class="btn primary" type="submit">${up ? 'สมัครและเข้าสู่ระบบ' : 'เข้าสู่ระบบ'}</button>
     </form>
-    ${!up && ctx.api.auth.canReset ? '<p class="small" style="text-align:center;margin:12px 0 0"><button class="link" id="forgot">ลืมรหัสผ่าน?</button></p>' : ''}
-    ${ctx.api.auth.allowSignup ? `<p class="small muted" style="text-align:center;margin:10px 0 0">${up ? 'มีบัญชีแล้ว?' : 'ยังไม่มีบัญชี?'} <button class="link" id="swap">${up ? 'เข้าสู่ระบบ' : 'สมัครใช้งาน'}</button></p>` : ''}
+ ${!up && pw && ctx.api.auth.canReset ? '<p class="small" style="text-align:center;margin:12px 0 0"><button class="link" id="forgot">ลืมรหัสผ่าน?</button></p>' : ''}
+    ${pw && ctx.api.auth.allowSignup ? `<p class="small muted" style="text-align:center;margin:10px 0 0">${up ? 'มีบัญชีแล้ว?' : 'ยังไม่มีบัญชี?'} <button class="link" id="swap">${up ? 'เข้าสู่ระบบ' : 'สมัครใช้งาน'}</button></p>` : ''}
     ${up ? '<p class="small muted" style="text-align:center;margin:8px 0 0">บัญชีใหม่ต้องรอ Admin กำหนดบทบาทและสาขาก่อนใช้งาน (ผู้ใช้คนแรกของระบบจะเป็น Admin อัตโนมัติ)</p>' : ''}`);
   const sw = $('#swap'); if (sw) sw.onclick = () => showLogin(up ? 'in' : 'up');
   const fg = $('#forgot'); if (fg) fg.onclick = () => showForgot();
