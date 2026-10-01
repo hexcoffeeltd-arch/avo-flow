@@ -137,6 +137,20 @@ const NAV = [
   { key: 'help', icon: 'help', label: 'คู่มือ' },
 ];
 
+/* ระบบอื่นของ Spot of Quality: กลับไป HR.SPOT หรือไประบบอุปกรณ์ผ่านหน้าล็อกอินกลาง (ไม่ต้องกรอกรหัสซ้ำถ้ายังเข้าระบบ HR.SPOT อยู่) */
+const OTHER_ICONS = {
+  hr: '<svg viewBox="0 0 24 24" fill="none" stroke-width="1.7"><circle cx="9" cy="8" r="3.2"/><path d="M3 20c0-3.3 2.7-6 6-6s6 2.7 6 6"/><circle cx="17" cy="9" r="2.5"/><path d="M15.5 14.2c2.9.2 5.5 2.6 5.5 5.8"/></svg>',
+  eq: '<svg viewBox="0 0 24 24" fill="none" stroke-width="1.7"><path d="M14.7 6.3a4 4 0 0 0-5.4 5.1L3.6 17.1a1.5 1.5 0 0 0 2.1 2.1l5.7-5.7a4 4 0 0 0 5.1-5.4l-2.5 2.5-2.1-.5-.5-2.1z"/></svg>',
+};
+function otherAppsNav() {
+  const hr = String(CONFIG.neon?.hrspotUrl || '');
+  if (CONFIG.backend !== 'neon' || !/^https:\/\/[^\s"'<>]+$/.test(hr)) return '';
+  const to = (app) => hr + (app ? (hr.includes('?') ? '&' : '?') + 'app=' + app : '');
+  return `<div class="nav-group">ระบบอื่น</div>` +
+    `<a href="${esc(to(''))}" class="nav-ext">${OTHER_ICONS.hr}<span>HR.SPOT</span></a>` +
+    `<a href="${esc(to('equipment'))}" class="nav-ext">${OTHER_ICONS.eq}<span>ระบบบริหารอุปกรณ์</span></a>`;
+}
+
 function renderShell() {
   const u = ctx.me; const c = ctx.can;
   const nm = (u.display_name || u.email || 'U').replace(/[()]/g, '').trim();
@@ -144,7 +158,7 @@ function renderShell() {
   document.body.innerHTML = `<div class="app" id="app">
     <aside class="sidebar">
       <div class="brand"><div class="brand-mark">A</div><div><div class="brand-name">${esc(CONFIG.appName)}</div><div class="brand-sub">${esc(CONFIG.appSub)}</div></div></div>
-      <nav class="nav">${NAV.map((n) => n.group ? `<div class="nav-group">${n.group}</div>` : (!n.show || n.show(c)) ? `<a href="#/${n.key}" data-nav="${n.key}">${ICONS[n.icon]}<span>${n.label}</span>${n.badge ? `<span class="nav-badge hidden" id="${n.badge}"></span>` : ''}</a>${n.sub ? `<div class="sub">${n.sub}</div>` : ''}` : '').join('')}</nav>
+      <nav class="nav">${NAV.map((n) => n.group ? `<div class="nav-group">${n.group}</div>` : (!n.show || n.show(c)) ? `<a href="#/${n.key}" data-nav="${n.key}">${ICONS[n.icon]}<span>${n.label}</span>${n.badge ? `<span class="nav-badge hidden" id="${n.badge}"></span>` : ''}</a>${n.sub ? `<div class="sub">${n.sub}</div>` : ''}` : '').join('')}${otherAppsNav()}</nav>
       <div class="sidebar-foot" id="me-btn" title="บัญชีผู้ใช้"><div class="avatar">${esc(initials)}</div><div style="min-width:0"><div class="user-name">${esc(u.display_name || u.email)}</div>
         <div class="user-role">${esc(ROLE[u.role])}${u.is_manager ? ' · ผู้จัดการ' : ''} · ${esc(u.site?.name || 'ทุกสาขา')}</div></div></div>
     </aside>
