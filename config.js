@@ -19,6 +19,10 @@ export const CONFIG = {
     sdkUrl: 'https://cdn.jsdelivr.net/npm/@neondatabase/neon-js/+esm',
     // อนุญาตให้สมัครสมาชิกเองจากหน้าเข้าสู่ระบบ (บัญชีใหม่ต้องรอ Admin กำหนดสิทธิ์ก่อนใช้งาน)
     allowSignup: true,
+    // ล็อกอินกลาง HR.SPOT: ลิงก์หน้าเข้าสู่ระบบของ HR.SPOT (…/exec) — ถ้าใส่ จะมีปุ่ม "เข้าสู่ระบบด้วยบัญชี HR.SPOT" ในหน้าเข้าสู่ระบบ
+    hrspotUrl: 'https://script.google.com/macros/s/AKfycbzqF2qJqVF_asrKzX3jsUoXkslFpOUO_Y2E6irNU8-saJlVXP4S8FRsvNcs4twTVu9Pqw/exec',
+    // false = ซ่อนฟอร์มอีเมล/รหัสผ่านเดิมและปิดสมัครเอง (ใช้หลังทุกคนเข้าผ่าน HR.SPOT ได้แล้ว)
+    passwordLogin: true,
   },
 
   // ใช้เมื่อ backend: 'supabase' — Project Settings → API (ค่า anon/publishable key เปิดเผยได้)
