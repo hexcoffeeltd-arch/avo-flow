@@ -14,9 +14,9 @@ export async function render(el, ctx, params) {
   if (tab === 'audit') await audit(t, ctx);
 }
 
-const LINE_KINDS = [['overripe', 'สุกมาก'], ['ripe', 'สุกแล้วควรจ่าย'], ['near_ripe', 'ใกล้สุก'], ['aging', 'ค้างคลัง'], ['late', 'ค้างรับเกินเวลา'], ['case', 'รับไม่ครบ'],
+const LINE_KINDS = [['negative_stock', 'ยอด Lot ติดลบ'], ['overripe', 'สุกมาก'], ['ripe', 'สุกแล้วควรจ่าย'], ['near_ripe', 'ใกล้สุก'], ['aging', 'ค้างคลัง'], ['late', 'ค้างรับเกินเวลา'], ['case', 'รับไม่ครบ'],
   ['overdue', 'งานเกินกำหนด'], ['pending_adjust', 'รออนุมัติตัดทิ้ง/ปรับยอด'], ['pending_return', 'รออนุมัติรับคืน'], ['credit_needed', 'ต้องออกใบลดหนี้'],
-  ['pending_stocktake', 'ผลตรวจนับรออนุมัติ'], ['pending_receipt', 'รอตรวจรับ'], ['low_stock', 'สต็อกต่ำ'], ['weight', 'น้ำหนักรับเข้าไม่ตรง']];
+  ['pending_stocktake', 'ผลตรวจนับรออนุมัติ'], ['pending_receipt', 'รอตรวจรับ'], ['low_stock', 'สต็อกต่ำ'], ['weight', 'น้ำหนักรับเข้าไม่ตรง'], ['pending_po', 'ใบสั่งซื้อรออนุมัติ'], ['budget_over', 'ยอดจัดซื้อใกล้หรือเกินงบ']];
 
 function general(el, ctx) {
   const s = ctx.master.settings || {}; const th = s.thresholds || {}; const op = s.options || {}; const co = s.company || {}; const ln = s.line || {};
@@ -38,6 +38,8 @@ function general(el, ctx) {
       <div class="grid" id="op">
         <label class="check"><input type="checkbox" name="require_receive_photo" ${op.require_receive_photo !== false ? 'checked' : ''}> ต้องแนบรูปเมื่อยืนยันรับปลายทาง</label>
         <label class="check"><input type="checkbox" name="require_waste_photo" ${op.require_waste_photo !== false ? 'checked' : ''}> ต้องแนบรูปเมื่อขอตัดทิ้ง</label>
+        <label class="check"><input type="checkbox" name="allow_negative_dispatch" ${op.allow_negative_dispatch !== false ? 'checked' : ''}> อนุญาตตีออกเกินยอดในระบบ (Lot ติดลบได้ · ผู้จัดการต้องกดยืนยัน)</label>
+        <div class="small muted" style="margin:-4px 0 4px 25px">ปิด = ห้ามจ่ายเกินยอดพร้อมใช้ · Lot ที่ติดลบจะขึ้นในแจ้งเตือน "ยอด Lot ติดลบ รอเคลียร์" และหักกลบให้เองเมื่อมีของเข้า</div>
         ${field('ส่วนลดสูงสุดที่ฝ่ายขายให้เองได้ (%)', `<input class="input" type="number" min="0" max="100" step="any" name="max_sales_discount_pct" value="${esc(op.max_sales_discount_pct ?? 5)}">`)}
       </div></div>
     <div class="card"><div class="card-title" style="margin-bottom:12px">ข้อมูลบริษัท (หัวบิล / ใบเสนอราคา)</div>
@@ -157,7 +159,7 @@ async function users(el, ctx, rerender) {
 
 async function audit(el, ctx) {
   const rows = await ctx.api.rpc('api_audit', { limit: 300 });
-  const A = { create: 'สร้าง', update: 'แก้ไข', confirm: 'ยืนยัน', cancel: 'ยกเลิก', reverse: 'กลับรายการ', ship: 'ยืนยันตีออก', receive: 'ยืนยันรับ', resolve: 'ปิดส่วนต่าง', approve: 'อนุมัติ', reject: 'ไม่อนุมัติ', signup: 'สมัคร', delete: 'ลบ' };
+  const A = { create: 'สร้าง', update: 'แก้ไข', confirm: 'ยืนยัน', cancel: 'ยกเลิก', reverse: 'กลับรายการ', ship: 'ยืนยันตีออก', edit_shipped: 'แก้ไขใบที่ตีออกแล้ว', receive: 'ยืนยันรับ', resolve: 'ปิดส่วนต่าง', approve: 'อนุมัติ', reject: 'ไม่อนุมัติ', signup: 'สมัคร', delete: 'ลบ', remove: 'นำออก', restore: 'เพิ่มกลับ' };
   el.innerHTML = `<div class="card">${table([{ label: 'เวลา', render: (a) => thDateTime(a.at) }, { label: 'ผู้ทำ', render: (a) => esc(a.actor || '-') }, { label: 'การกระทำ', render: (a) => esc(A[a.action] || a.action) },
     { label: 'ข้อมูล', render: (a) => `${esc(a.entity)} #${esc(a.entity_id)}` }, { label: 'รายละเอียด', render: (a) => `<span class="small muted">${esc(a.data ? JSON.stringify(a.data).slice(0, 120) : '')}</span>` }], rows, { empty: 'ยังไม่มีประวัติ' })}</div>`;
 }

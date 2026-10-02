@@ -51,8 +51,10 @@ export async function render(el, ctx, params) {
         { label: 'จุด', render: (r) => ZONE[r.zone] }, { label: 'Lot', render: (r) => `<span class="lot">${esc(r.lot_code)}</span>` },
         { label: 'สินค้า', render: (r) => `${esc(r.variety || '-')} · ${esc(r.size || '-')}` }, { label: 'ความสุก', render: (r) => ripBadge(r.ripeness) },
         { label: 'รับเข้า', render: (r) => `${thDate(r.received_at)} <span class="small muted">(${r.age_days} วัน)</span>` },
-        { label: 'คงเหลือ', right: true, render: (r) => `<b>${fmtN(r.kg)} กก.</b><div class="small muted">${r.bags ? fmtN(r.bags) + ' ถุง' : fmtN(r.baskets) + ' ตะกร้า'}${r.est_pieces ? ' · ≈' + fmtN(r.est_pieces) + ' ลูก' : ''}</div>` },
-        { label: '', render: (r) => (act ? `<span class="actions" style="justify-content:flex-end">${r.product === 'fresh' ? `<button class="btn sm" data-q="rip" data-k="${r.lot_id}|${r.ripeness}|${r.zone}">ความสุก</button><button class="btn sm" data-q="rw" data-k="${r.lot_id}|${r.ripeness}|${r.zone}">ชั่งซ้ำ</button>` : ''}<button class="btn sm" data-q="waste" data-k="${r.lot_id}|${r.ripeness}|${r.zone}">ตัดทิ้ง</button></span>` : '') },
+        { label: 'คงเหลือ', right: true, render: (r) => (Number(r.kg) < 0 ? `<b class="bad">${fmtN(r.kg)} กก.</b><div class="small bad">ติดลบ · รอเคลียร์</div>`
+          : `<b>${fmtN(r.kg)} กก.</b><div class="small muted">${r.bags ? fmtN(r.bags) + ' ถุง' : fmtN(r.baskets) + ' ตะกร้า'}${r.est_pieces ? ' · ≈' + fmtN(r.est_pieces) + ' ลูก' : ''}</div>`) },
+        { label: '', render: (r) => (!act ? '' : Number(r.kg) < 0 ? `<span class="actions" style="justify-content:flex-end"><button class="btn sm" data-q="adj" data-k="${r.lot_id}|${r.ripeness}|${r.zone}|${-Number(r.kg)}">ปรับยอด</button></span>`
+          : `<span class="actions" style="justify-content:flex-end">${r.product === 'fresh' ? `<button class="btn sm" data-q="rip" data-k="${r.lot_id}|${r.ripeness}|${r.zone}">ความสุก</button><button class="btn sm" data-q="rw" data-k="${r.lot_id}|${r.ripeness}|${r.zone}">ชั่งซ้ำ</button>` : ''}<button class="btn sm" data-q="waste" data-k="${r.lot_id}|${r.ripeness}|${r.zone}">ตัดทิ้ง</button></span>`) },
       ], stock.sort((a, c) => a.zone.localeCompare(c.zone) || c.rip_rank - a.rip_rank), { rowAttr: (r) => `class="click" data-lot="${r.lot_id}"`, empty: 'ยังไม่มีสต็อกที่สาขานี้' })}</div>
     ${b.recent.length ? `<div class="card"><div class="card-title" style="margin-bottom:10px">รับล่าสุด</div>${table([{ label: 'ใบโอน', key: 'doc_no' }, { label: 'ต้นทาง', key: 'from_site' }, { label: 'รับเมื่อ', render: (d) => thDateTime(d.received_at) }, { label: 'ส่ง / รับ', right: true, render: (d) => `${fmtN(d.total_kg)} / ${fmtN(d.total_received_kg)} กก.` }, { label: 'ผู้รับ', key: 'receiver_name' }, { label: '', right: true, render: (d) => statusBadge('dispatch', d.status) }], b.recent, { rowAttr: (d) => `class="click" data-d="${d.id}"` })}</div>` : ''}
     <div class="foot-note"><b>กฎสต็อก</b> คลัง → ระหว่างทาง → สาขา · ไม่นับยอดซ้ำ · ตัดทิ้งและปรับยอดต้องให้ผู้จัดการสาขาอนุมัติ</div>`;
@@ -72,8 +74,9 @@ export async function render(el, ctx, params) {
     else if (op === 'stocktake') { if (openSt) stocktakeView(ctx, openSt.id); else stocktakeStart(ctx, current); }
     else adjustModal(ctx, current, op);
   }));
-  $$('[data-q]', el).forEach((btn) => (btn.onclick = () => { const [lot_id, ripeness, zone] = btn.dataset.k.split('|');
-    if (btn.dataset.q === 'rip') ripenessModal(ctx, { site_id: current, zone, preset: { lot_id, ripeness } });
+  $$('[data-q]', el).forEach((btn) => (btn.onclick = () => { const [lot_id, ripeness, zone, kg] = btn.dataset.k.split('|');
+    if (btn.dataset.q === 'adj') adjustModal(ctx, current, 'count_adjust', { lot_id, ripeness, zone, kg: Number(kg), reason: 'เคลียร์ยอดติดลบ: ' });
+    else if (btn.dataset.q === 'rip') ripenessModal(ctx, { site_id: current, zone, preset: { lot_id, ripeness } });
     else if (btn.dataset.q === 'rw') reweighModal(ctx, { site_id: current, zone, preset: { lot_id, ripeness } });
     else adjustModal(ctx, current, 'waste', { lot_id, ripeness, zone }); }));
 }

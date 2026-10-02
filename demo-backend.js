@@ -6,7 +6,7 @@
 // =====================================================================
 
 const R2 = (n) => Math.round((Number(n) + Number.EPSILON) * 100) / 100;
-const num = (p, k) => (p == null || p[k] === undefined || p[k] === null || p[k] === '' ? null : Number(p[k]));
+const num = (p, k) => { if (p == null || p[k] === undefined || p[k] === null || p[k] === '') return null; const v = Number(p[k]); return Number.isFinite(v) ? v : null; };
 const int = (p, k) => { const v = num(p, k); return v == null ? null : Math.round(v); };
 const txt = (p, k) => (p == null || p[k] == null || String(p[k]).trim() === '' ? null : String(p[k]).trim());
 const bool = (p, k, d) => (p == null || p[k] == null ? d : p[k] === true || p[k] === 'true');
@@ -38,7 +38,8 @@ export function createDemoBackend(storageKey = 'avoflow-demo-v1') {
     dispatches: [], dispatch_lines: [], cases: [], internal_transfers: [], freezes: [], adjustments: [],
     ripeness_checks: [], quotes: [], quote_lines: [], invoices: [], invoice_lines: [], audit_log: [],
     returns: [], return_lines: [], credit_notes: [], credit_note_lines: [], stocktakes: [], stocktake_lines: [],
-    assignments: [], client_requests: [], notify_log: [],
+    assignments: [], client_requests: [], notify_log: [], purchase_orders: [], po_lines: [], purchase_budgets: [],
+    plan_dests: [], delivery_plans: [],
   });
 
   const nextId = (t) => (db.seq[t] = (db.seq[t] || 0) + 1);
@@ -84,26 +85,34 @@ export function createDemoBackend(storageKey = 'avoflow-demo-v1') {
   const userOut = (u) => { const { auth_sub, ...rest } = u; return rest; };
   const checkZone = (sid, z) => { const k = site(sid)?.kind; if (!k) fail('ไม่พบสถานที่');
     if ((k === 'warehouse' && !['main', 'frozen'].includes(z)) || (k === 'branch' && !['front', 'back', 'frozen'].includes(z))) fail(`จุดจัดเก็บ "${zoneL(z)}" ใช้กับสถานที่นี้ไม่ได้`); };
-  const needFree = (sid, z, l, r, kg) => { if (!(kg > 0)) return; const have = bal(sid, z, l, r)?.kg || 0; const res = reserved(sid, z, l, r);
-    if (R2(have - res) < kg) fail(`สต็อกว่างไม่พอ: คงเหลือ ${fmt(have)} กก. ถูกจองในใบตีออกร่าง ${fmt(res)} กก. ใช้ได้ ${fmt(Math.max(have - res, 0))} กก.`); };
+  // รุ่น 2.5: ใบตีออกร่างจองยอดระดับ Lot (รวมทุกความสุก) — รายการที่ลดยอด Lot ต้องไม่กินยอดที่ใบร่างจองไว้ · ยอดของช่องความสุกนั้นพอหรือไม่ move() เป็นผู้ตรวจ
+  const needFree = (sid, z, l, r, kg) => { if (!(kg > 0)) return; const tot = lotTotal(sid, z, l); const lres = lotReserved(sid, z, l);
+    const docs = [...new Set(db.dispatch_lines.filter((dl) => { const d = byId('dispatches', dl.dispatch_id); return d.status === 'draft' && d.from_site_id === sid && d.from_zone === z && dl.lot_id === l; })
+      .map((dl) => byId('dispatches', dl.dispatch_id).doc_no))].sort();
+    if (R2(tot - lres) < kg) fail(`สต็อกว่างไม่พอ: Lot นี้คงเหลือรวม ${fmt(tot)} กก. ถูกจองในใบตีออกร่าง ${fmt(lres)} กก.${docs.length ? ' (' + docs.join(', ') + ')' : ''} ใช้ได้ ${fmt(Math.max(tot - lres, 0))} กก.`); };
   const company = (u) => need(u, ['warehouse', 'sales', 'executive']);
   const uuid = () => (globalThis.crypto?.randomUUID ? crypto.randomUUID() : 'xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx'.replace(/[xy]/g, (c) => { const r = Math.random() * 16 | 0; return (c === 'x' ? r : (r & 3 | 8)).toString(16); }));
 
   // ---------- ยอดคงเหลือ + สมุดเคลื่อนไหว ----------
   const bal = (s, z, l, r) => db.balances.find((b) => b.site_id === s && b.zone === z && b.lot_id === l && b.ripeness === r);
+  // ยอดติดลบ (รุ่น 2.5): ปกติห้ามลดจนติดลบ · ยกเว้นตอนยืนยันตีออกเมื่อเปิด "ตีออกเกินยอดได้" (G.allowNeg) · ระหว่างทางห้ามติดลบเสมอ
+  //   มีของเข้า (+) แล้ว Lot เดียวกันที่จุดเดียวกันมีความสุกอื่นติดลบ → หักกลบให้อัตโนมัติ (ปิดได้ด้วย G.noNet)
+  const G = { allowNeg: false, noNet: false };
   function move(s, z, l, r, dkg, dbask, dbag, mtype, docType, docId, docNo, actor, reason = null, evidence = null, approver = null, counterparty = null, occurred = null) {
     dkg = R2(dkg || 0); dbask = dbask || 0; dbag = dbag || 0;
+    if (Number.isNaN(dkg)) fail('น้ำหนักไม่ถูกต้อง');
     if (!dkg && !dbask && !dbag) return { id: null, d_baskets: 0, d_bags: 0 };
     let b = bal(s, z, l, r);
     if (!b) { b = { site_id: s, zone: z, lot_id: l, ripeness: r, kg: 0, baskets: 0, bags: 0, updated_at: nowIso() }; db.balances.push(b); }
+    const negOk = z !== 'transit' && G.allowNeg;
     const nk = R2(b.kg + dkg);
     const lcode = byId('lots', l)?.code;
-    if (nk < 0) fail(`สต็อกไม่พอ: ${lcode} (${zoneL(z)} · ${ripL(r)}) คงเหลือ ${fmt(b.kg)} กก. แต่ต้องการ ${fmt(-dkg)} กก.`);
+    if (nk < 0 && dkg < 0 && !negOk) fail(`สต็อกไม่พอ: ${lcode} (${zoneL(z)} · ${ripL(r)}) คงเหลือ ${fmt(b.kg)} กก. แต่ต้องการ ${fmt(-dkg)} กก.`);
     let nb = b.baskets + dbask;
-    if (nb < 0 || (nk === 0 && dkg < 0)) nb = 0;
+    if (nb < 0 || (nk <= 0 && dkg < 0)) nb = 0;
     let ng = b.bags + dbag;
-    if (ng < 0) fail(`จำนวนถุงไม่พอ: ${lcode} คงเหลือ ${b.bags} ถุง แต่ต้องการ ${-dbag} ถุง`);
-    if (nk === 0 && dkg < 0) ng = 0;
+    if (ng < 0) { if (negOk && nk < 0) ng = 0; else fail(`จำนวนถุงไม่พอ: ${lcode} คงเหลือ ${b.bags} ถุง แต่ต้องการ ${-dbag} ถุง`); }
+    if (nk <= 0 && dkg < 0) ng = 0;
     const m = ins('movements', {
       mtype, doc_type: docType, doc_id: docId, doc_no: docNo, lot_id: l, site_id: s, zone: z, ripeness: r,
       d_kg: dkg, d_baskets: nb - b.baskets, d_bags: ng - b.bags, before_kg: b.kg, after_kg: nk,
@@ -113,8 +122,33 @@ export function createDemoBackend(storageKey = 'avoflow-demo-v1') {
     });
     const out = { id: m.id, d_baskets: nb - b.baskets, d_bags: ng - b.bags };
     Object.assign(b, { kg: nk, baskets: nb, bags: ng, updated_at: nowIso() });
+    if (dkg > 0 && nk > 0 && z !== 'transit' && docType !== 'NET' && !G.noNet) netLot(s, z, l, actor, docId, docNo, approver, occurred);
     return out;
   }
+  const cmp = (a, b) => (a < b ? -1 : a > b ? 1 : 0);
+  // หักกลบภายใน Lot ที่จุดเดียว: ความสุกที่ติดลบ ← ดึงจากความสุกที่ยังเป็นบวก (ใกล้กันก่อน)
+  function netLot(s, z, l, actor, docId, docNo, approver = null, occurred = null) {
+    if (z === 'transit') return;
+    const rows = () => db.balances.filter((b) => b.site_id === s && b.zone === z && b.lot_id === l).map((b) => ({ ripeness: b.ripeness, kg: b.kg }));
+    for (const neg of rows().filter((b) => b.kg < 0).sort((a, b) => a.kg - b.kg || cmp(a.ripeness, b.ripeness))) {
+      let need_ = -neg.kg;
+      const dist = (x) => Math.abs(RIP_RANK[x.ripeness] - RIP_RANK[neg.ripeness]);
+      for (const pos of rows().filter((b) => b.kg > 0).sort((a, b) => dist(a) - dist(b) || RIP_RANK[a.ripeness] - RIP_RANK[b.ripeness])) {
+        if (need_ <= 0) break;
+        const x = Math.min(need_, pos.kg); const why = `หักกลบยอดติดลบอัตโนมัติ: ${ripL(pos.ripeness)} → ${ripL(neg.ripeness)}`;
+        move(s, z, l, pos.ripeness, -x, 0, 0, 'RIPEN_OUT', 'NET', docId, docNo, actor, why, null, approver, null, occurred);
+        move(s, z, l, neg.ripeness, x, 0, 0, 'RIPEN_IN', 'NET', docId, docNo, actor, why, null, approver, null, occurred);
+        need_ = R2(need_ - x);
+      }
+      if (need_ > 0) break;
+    }
+  }
+  const lotTotal = (s, z, l) => R2(db.balances.filter((b) => b.site_id === s && b.zone === z && b.lot_id === l).reduce((a, b) => a + b.kg, 0));
+  const lotReserved = (s, z, l, exclude = null) => R2(db.dispatch_lines.filter((dl) => { const d = byId('dispatches', dl.dispatch_id);
+    return d.status === 'draft' && d.from_site_id === s && d.from_zone === z && dl.lot_id === l && d.id !== exclude; }).reduce((a, dl) => a + dl.kg, 0));
+  const lotFree = (s, z, l, exclude = null) => R2(lotTotal(s, z, l) - lotReserved(s, z, l, exclude));
+  // ตั้งค่า options.allow_negative_dispatch: ไม่ได้ตั้ง = อนุญาต · false = ห้ามจ่ายเกินยอดพร้อมใช้
+  const allowNegative = () => { const v = setting('options').allow_negative_dispatch; return v == null ? true : v === true || v === 'true'; };
   const fmt = (n) => String(R2(n));
   const R1 = (n) => Math.round((Number(n) + Number.EPSILON) * 10) / 10;
   const sizeAvg = (id) => { const z = byId('sizes', id); if (!z) return null;
@@ -144,27 +178,39 @@ export function createDemoBackend(storageKey = 'avoflow-demo-v1') {
   const receiptJson = (id) => {
     const r = byId('receipts', id); if (!r) return null;
     const lines = db.receipt_lines.filter((x) => x.receipt_id === r.id).sort((a, b) => a.line_no - b.line_no);
-    return { ...r, supplier: byId('suppliers', r.supplier_id)?.name, site: site(r.site_id)?.name,
+    return { ...r, po_id: r.po_id ?? null, supplier: byId('suppliers', r.supplier_id)?.name, site: site(r.site_id)?.name, po_no: byId('purchase_orders', r.po_id)?.doc_no ?? null,
       created_by_name: uname(r.created_by), checked_by_name: uname(r.checked_by),
       total_net: R2(lines.reduce((s, x) => s + x.net_kg, 0)), total_accepted: R2(lines.reduce((s, x) => s + (x.accepted_kg || 0), 0)),
       total_baskets: lines.reduce((s, x) => s + x.baskets, 0),
-      lines: lines.map((x) => ({ ...x, lot_code: byId('lots', x.lot_id)?.code, variety: byId('varieties', x.variety_id)?.name, size: byId('sizes', x.size_id)?.name })) };
+      lines: lines.map((x) => ({ ...x, po_line_id: x.po_line_id ?? null, lot_code: byId('lots', x.lot_id)?.code, variety: byId('varieties', x.variety_id)?.name, size: byId('sizes', x.size_id)?.name })) };
   };
   const reserved = (s, z, l, r, exclude = null) => R2(db.dispatch_lines.filter((dl) => {
     const d = byId('dispatches', dl.dispatch_id);
     return d.status === 'draft' && d.from_site_id === s && d.from_zone === z && dl.lot_id === l && dl.ripeness === r && d.id !== exclude;
   }).reduce((a, dl) => a + dl.kg, 0));
+  // ยอดจองที่แสดงต่อช่องความสุก (ใบร่างจองระดับ Lot): จองตรงตามความสุกที่กรอกก่อน ส่วนที่เกินนับเป็นการจองช่องอื่นของ Lot ที่ยังมียอดเหลือ
+  const reservedAlloc = (s, z, l, rip) => {
+    const ord = [...RIP, 'na']; const dir = Object.fromEntries(ord.map((k) => [k, reserved(s, z, l, k)]));
+    if (!ord.some((k) => dir[k] > 0)) return 0;
+    const cap = Object.fromEntries(ord.map((k) => [k, Math.max(bal(s, z, l, k)?.kg || 0, 0)]));
+    let over = R2(ord.reduce((a, k) => a + dir[k] - Math.min(dir[k], cap[k]), 0)); const res = Math.min(dir[rip] ?? 0, cap[rip] ?? 0);
+    for (const k of ord) { if (over <= 0) break; const take = Math.min(over, R2(cap[k] - Math.min(dir[k], cap[k]))); if (k === rip) return R2(res + take); over = R2(over - take); }
+    return R2(res);
+  };
   const dispatchJson = (id) => {
     const d = byId('dispatches', id); if (!d) return null;
     const lines = db.dispatch_lines.filter((x) => x.dispatch_id === d.id).sort((a, b) => a.line_no - b.line_no);
     const c = byId('customers', d.customer_id); const fs = site(d.from_site_id); const ts = site(d.to_site_id);
     const rec = lines.filter((x) => x.received_kg != null);
     return { ...d, from_site: fs?.name, from_site_kind: fs?.kind, to_site: ts?.name ?? null, customer: c?.name ?? null, channel: c?.channel ?? null,
-      destination: c?.name ?? ts?.name ?? null, created_by_name: uname(d.created_by), shipped_by_name: uname(d.shipped_by), received_by_name: uname(d.received_by),
+      details: d.details ?? null, edited_by: d.edited_by ?? null, edited_at: d.edited_at ?? null, edit_reason: d.edit_reason ?? null,
+      destination: c?.name ?? ts?.name ?? null, destination_address: c?.address ?? null, destination_phone: c?.phone ?? null,
+      created_by_name: uname(d.created_by), shipped_by_name: uname(d.shipped_by), received_by_name: uname(d.received_by), edited_by_name: uname(d.edited_by),
+      shortages: d.status === 'draft' ? dispatchShortages(d.id) : [],
       total_kg: R2(lines.reduce((s, x) => s + x.kg, 0)), total_received_kg: rec.length ? R2(rec.reduce((s, x) => s + x.received_kg, 0)) : null,
       total_baskets: lines.reduce((s, x) => s + x.baskets, 0), total_billed_kg: R2(lines.reduce((s, x) => s + x.billed_kg, 0)),
       open_cases: db.cases.filter((x) => x.dispatch_id === d.id && x.status === 'open').length,
-      lines: lines.map((x) => { const l = byId('lots', x.lot_id); return { ...x, lot_code: l.code, product: l.product,
+      lines: lines.map((x) => { const l = byId('lots', x.lot_id); return { ...x, detail: x.detail ?? null, lot_code: l.code, product: l.product,
         variety: byId('varieties', l.variety_id)?.name ?? null, size: byId('sizes', l.size_id)?.name ?? null,
         supplier: byId('suppliers', l.supplier_id)?.name ?? null, unit_cost: l.unit_cost, avg_g: l.avg_g ?? null }; }),
       cases: db.cases.filter((x) => x.dispatch_id === d.id).sort((a, b) => a.id - b.id) };
@@ -242,11 +288,13 @@ export function createDemoBackend(storageKey = 'avoflow-demo-v1') {
 
   // ผู้ใช้ที่มีประวัติในเอกสาร/สมุดเคลื่อนไหว ลบไม่ได้ (ตรงกับ FK ที่อ้าง avo.users ใน SQL)
   const USER_REFS = [['adjustments', 'decided_by'], ['adjustments', 'requested_by'], ['assignments', 'assigned_by'], ['cases', 'resolved_by'],
-    ['credit_notes', 'cancelled_by'], ['credit_notes', 'created_by'], ['dispatches', 'created_by'], ['dispatches', 'received_by'], ['dispatches', 'shipped_by'],
+    ['credit_notes', 'cancelled_by'], ['credit_notes', 'created_by'], ['dispatches', 'created_by'], ['dispatches', 'received_by'], ['dispatches', 'shipped_by'], ['dispatches', 'edited_by'],
     ['freezes', 'created_by'], ['internal_transfers', 'created_by'], ['invoices', 'cancelled_by'], ['invoices', 'created_by'], ['movements', 'actor_id'],
     ['movements', 'approver_id'], ['quotes', 'created_by'], ['receipts', 'checked_by'], ['receipts', 'created_by'], ['returns', 'decided_by'],
     ['returns', 'requested_by'], ['ripeness_checks', 'checked_by'], ['stocktake_lines', 'counted_by'], ['stocktakes', 'created_by'],
-    ['stocktakes', 'decided_by'], ['stocktakes', 'submitted_by']];
+    ['stocktakes', 'decided_by'], ['stocktakes', 'submitted_by'], ['purchase_orders', 'created_by'], ['purchase_orders', 'approved_by'],
+    ['purchase_orders', 'closed_by'], ['purchase_budgets', 'updated_by'], ['plan_dests', 'created_by'], ['delivery_plans', 'created_by'],
+    ['delivery_plans', 'updated_by']];
   const userInUse = (id) => USER_REFS.some(([t, c]) => (db[t] || []).some((r) => r[c] === id));
   A.api_users = () => { const u = cur(); need(u, ['admin']);
     return db.users.map((x) => ({ ...userOut(x), site_name: site(x.site_id)?.name ?? null, can_delete: x.id !== u.id && !userInUse(x.id) }))
@@ -299,7 +347,8 @@ export function createDemoBackend(storageKey = 'avoflow-demo-v1') {
   A.api_settings_save = (p) => {
     const u = cur(); need(u, ['admin']);
     if (!['thresholds', 'company', 'options', 'line'].includes(p.key)) fail('หมวดการตั้งค่าไม่ถูกต้อง');
-    db.settings[p.key] = { value: p.value || {}, updated_by: u.id, updated_at: nowIso() };
+    const isObj = (v) => v && typeof v === 'object' && !Array.isArray(v); const oldV = db.settings[p.key]?.value; const newV = p.value || {};
+    db.settings[p.key] = { value: isObj(oldV) && isObj(newV) ? { ...oldV, ...newV } : newV, updated_by: u.id, updated_at: nowIso() };   // รวมกับค่าเดิม (หัวข้อที่หน้าเว็บรุ่นเก่าไม่ได้ส่งมาไม่หาย)
     audit(u.id, 'update', 'settings', p.key, p.value);
     return masterJson();
   };
@@ -411,6 +460,10 @@ export function createDemoBackend(storageKey = 'avoflow-demo-v1') {
   // ---------- รับเข้า ----------
   A.api_receipt_save = (p) => {
     const u = cur(); need(u, ['warehouse']);
+    let po = null;
+    if (num(p, 'po_id') != null) { po = byId('purchase_orders', num(p, 'po_id'));
+      if (!po || !['approved', 'partial'].includes(po.status)) fail('ใบสั่งซื้อต้องอนุมัติแล้วและยังไม่ปิด');
+      p = { ...p, supplier_id: po.supplier_id, site_id: num(p, 'site_id') ?? po.site_id }; }
     const sid = num(p, 'site_id') ?? u.site_id ?? db.sites.filter((s) => s.kind === 'warehouse' && s.active).sort((a, b) => a.sort - b.sort || a.id - b.id)[0]?.id;
     if (sid == null) fail('ยังไม่ได้ตั้งค่าคลังสินค้า (ตั้งค่า → สาขา/คลัง)');
     if (site(sid)?.kind !== 'warehouse') fail('รับเข้าจากสวนได้เฉพาะที่คลัง');
@@ -421,12 +474,12 @@ export function createDemoBackend(storageKey = 'avoflow-demo-v1') {
     let r; const rid = num(p, 'id');
     if (rid == null) {
       r = ins('receipts', { doc_no: nextNo('IN'), supplier_id: sup, site_id: sid, received_at: p.received_at ? new Date(p.received_at).toISOString() : nowIso(),
-        status, note: txt(p, 'note'), evidence: txt(p, 'evidence'), created_by: u.id, created_at: nowIso(), checked_by: null, checked_at: null, cancel_reason: null, updated_at: nowIso() });
+        status, note: txt(p, 'note'), evidence: txt(p, 'evidence'), created_by: u.id, created_at: nowIso(), checked_by: null, checked_at: null, cancel_reason: null, updated_at: nowIso(), po_id: po?.id ?? null });
     } else {
       r = byId('receipts', rid); if (r && !canAct(u, r.site_id)) fail('ไม่มีสิทธิ์แก้ไขใบรับเข้าของคลังอื่น');
       if (!r || !['draft', 'pending_check'].includes(r.status)) fail('แก้ไขได้เฉพาะใบรับเข้าที่ยังไม่ยืนยัน');
       Object.assign(r, { supplier_id: sup, site_id: sid, received_at: p.received_at ? new Date(p.received_at).toISOString() : r.received_at, status,
-        note: txt(p, 'note'), evidence: txt(p, 'evidence') ?? r.evidence, updated_at: nowIso() });
+        note: txt(p, 'note'), evidence: txt(p, 'evidence') ?? r.evidence, updated_at: nowIso(), po_id: po?.id ?? null });
     }
     const keep = [];
     p.lines.forEach((ln, idx) => {
@@ -444,8 +497,9 @@ export function createDemoBackend(storageKey = 'avoflow-demo-v1') {
         if (tare < 0 || tare >= gross) fail(`รายการที่ ${i}: น้ำหนักตะกร้าต้องน้อยกว่าน้ำหนักรวม`);
       }
       const avg = pcs != null ? R1((gross - tare) * 1000 / pcs) : sizeAvg(s);
+      const pol = po ? poLineFor(po.id, v, s) : null;
       const vals = { line_no: i, variety_id: v, size_id: s, ripeness: rip, baskets: bk, gross_kg: R2(gross), tare_kg: R2(tare),
-        net_kg: R2(gross - tare), pieces: pcs ?? null, is_estimated: est, est_kg: est ? R2(gross) : null, unit_cost: num(ln, 'unit_cost') ?? 0, note: txt(ln, 'note') };
+        net_kg: R2(gross - tare), pieces: pcs ?? null, is_estimated: est, est_kg: est ? R2(gross) : null, unit_cost: num(ln, 'unit_cost') ?? pol?.price ?? 0, note: txt(ln, 'note'), po_line_id: pol?.id ?? null };
       const ex = db.receipt_lines.find((x) => x.id === num(ln, 'id') && x.receipt_id === r.id);
       if (ex) {
         Object.assign(byId('lots', ex.lot_id), { variety_id: v, size_id: s, supplier_id: sup, received_at: r.received_at, unit_cost: vals.unit_cost, avg_g: avg });
@@ -485,6 +539,7 @@ export function createDemoBackend(storageKey = 'avoflow-demo-v1') {
       move(r.site_id, 'main', rl.lot_id, rl.ripeness, rl.accepted_kg, rl.baskets, 0, 'RECEIVE', 'RECEIPT', r.id, r.doc_no, u.id, txt(p, 'note'), [r.evidence, txt(p, 'evidence')].filter(Boolean).join('|') || null, u.id, sname, r.received_at);
     });
     Object.assign(r, { status: 'confirmed', checked_by: u.id, checked_at: nowIso(), evidence: [r.evidence, txt(p, 'evidence')].filter(Boolean).join('|') || null, updated_at: nowIso() });
+    poRefresh(r.po_id);
     audit(u.id, 'confirm', 'receipt', r.id, p);
     return receiptJson(r.id);
   };
@@ -507,7 +562,7 @@ export function createDemoBackend(storageKey = 'avoflow-demo-v1') {
     if (bad.length) fail('Lot ' + bad.join(', ') + ' ถูกเคลื่อนไหวแล้ว กลับรายการทั้งใบไม่ได้ ให้ใช้การปรับยอดที่อ้างอิงรายการเดิมแทน');
     lines.forEach((rl) => { needFree(r.site_id, 'main', rl.lot_id, rl.ripeness, rl.accepted_kg); move(r.site_id, 'main', rl.lot_id, rl.ripeness, -rl.accepted_kg, -rl.baskets, 0, 'RECEIVE_REVERSE', 'RECEIPT', r.id, r.doc_no, u.id, txt(p, 'reason'), txt(p, 'evidence'), u.id);
       byId('lots', rl.lot_id).status = 'cancelled'; });
-    Object.assign(r, { status: 'reversed', cancel_reason: txt(p, 'reason'), updated_at: nowIso() });
+    Object.assign(r, { status: 'reversed', cancel_reason: txt(p, 'reason'), updated_at: nowIso() }); poRefresh(r.po_id);
     audit(u.id, 'reverse', 'receipt', r.id, p);
     return receiptJson(r.id);
   };
@@ -523,7 +578,7 @@ export function createDemoBackend(storageKey = 'avoflow-demo-v1') {
   // ---------- สต็อก ----------
   A.api_stock = (p) => {
     const u = cur(); const q = txt(p, 'q')?.toLowerCase();
-    return nocost(u, db.balances.filter((b) => (b.kg > 0 || b.bags > 0) && canSee(u, b.site_id)
+    return nocost(u, db.balances.filter((b) => (b.kg !== 0 || b.bags > 0) && canSee(u, b.site_id)
       && (num(p, 'site_id') == null || b.site_id === num(p, 'site_id'))
       && (txt(p, 'zone') == null ? b.zone !== 'transit' : b.zone === p.zone)
       && (!txt(p, 'site_kind') || site(b.site_id).kind === p.site_kind)
@@ -534,7 +589,7 @@ export function createDemoBackend(storageKey = 'avoflow-demo-v1') {
           supplier_id: l.supplier_id, supplier: byId('suppliers', l.supplier_id)?.name ?? null, received_at: l.received_at, age_days: ageDays(l),
           ripeness: b.ripeness, rip_rank: RIP_RANK[b.ripeness], kg: b.kg, baskets: b.baskets, bags: b.bags, unit_cost: l.unit_cost,
           value: R2(b.kg * l.unit_cost), avg_g: l.avg_g ?? null, est_pieces: l.avg_g > 0 ? Math.round(b.kg * 1000 / l.avg_g) : null,
-          reserved_kg: reserved(b.site_id, b.zone, b.lot_id, b.ripeness), updated_at: b.updated_at }; })
+          reserved_kg: reservedAlloc(b.site_id, b.zone, b.lot_id, b.ripeness), updated_at: b.updated_at }; })
       .filter((x) => (num(p, 'variety_id') == null || x.variety_id === num(p, 'variety_id')) && (num(p, 'size_id') == null || x.size_id === num(p, 'size_id'))
         && (num(p, 'supplier_id') == null || x.supplier_id === num(p, 'supplier_id')) && (!txt(p, 'product') || x.product === p.product)
         && (!q || like(x.lot_code, q) || like(x.variety, q) || like(x.supplier, q) || like(x.size, q)))
@@ -565,8 +620,7 @@ export function createDemoBackend(storageKey = 'avoflow-demo-v1') {
     if (!RIP.includes(t) || !RIP.includes(f)) fail('สถานะความสุกไม่ถูกต้อง');
     if (kg == null || kg <= 0) fail('กรุณาระบุน้ำหนักที่ตรวจ');
     if (['frozen', 'transit'].includes(z)) fail('เปลี่ยนความสุกได้เฉพาะสินค้าสดในคลัง/หน้าร้าน/หลังร้าน');
-    needFree(sid, z, lot, f, kg);
-    const no = nextNo('RIP');
+    const no = nextNo('RIP');   // เปลี่ยนความสุกไม่ลดยอดรวมของ Lot จึงไม่ตรวจยอดจอง · ยอดของช่องนั้นพอหรือไม่ move() ตรวจ
     const c = ins('ripeness_checks', { doc_no: no, lot_id: lot, site_id: sid, zone: z, from_ripeness: f, to_ripeness: t, kg: R2(kg), baskets: bk,
       note: txt(p, 'note'), evidence: txt(p, 'evidence'), checked_by: u.id, checked_at: p.checked_at ? new Date(p.checked_at).toISOString() : nowIso() });
     const r = move(sid, z, lot, f, -kg, -bk, 0, 'RIPEN_OUT', 'RIPENESS', c.id, no, u.id, txt(p, 'note'), txt(p, 'evidence'));
@@ -634,7 +688,7 @@ export function createDemoBackend(storageKey = 'avoflow-demo-v1') {
     const lj = lotJson(l.id); if (br) delete lj.unit_cost;
     return { ...lj, root: root.id !== l.id ? lotJson(root.id) : null,
       receipt: r ? { id: r.id, doc_no: r.doc_no, received_at: r.received_at, supplier: sp.name, contact: sp.contact, phone: sp.phone, province: sp.province } : null,
-      balances: db.balances.filter((b) => b.lot_id === l.id && (b.kg > 0 || b.bags > 0) && canSee(tu, b.site_id)).map((b) => ({ site: site(b.site_id).name, zone: b.zone, ripeness: b.ripeness, kg: b.kg, baskets: b.baskets, bags: b.bags })),
+      balances: db.balances.filter((b) => b.lot_id === l.id && (b.kg !== 0 || b.bags > 0) && canSee(tu, b.site_id)).map((b) => ({ site: site(b.site_id).name, zone: b.zone, ripeness: b.ripeness, kg: b.kg, baskets: b.baskets, bags: b.bags })),
       destinations: db.dispatch_lines.filter((dl) => dl.lot_id === l.id).map((dl) => ({ dl, d: byId('dispatches', dl.dispatch_id) })).filter(({ d }) => d.status !== 'cancelled' && mine(d.from_site_id, d.to_site_id))
         .sort((a, b) => ((a.d.shipped_at || '~') < (b.d.shipped_at || '~') ? -1 : 1))
         .map(({ dl, d }) => { const c = byId('customers', d.customer_id); return { doc_no: d.doc_no, kind: d.kind, to: c?.name ?? site(d.to_site_id)?.name, channel: c?.channel ?? null, kg: dl.kg, received_kg: dl.received_kg, status: d.status }; }),
@@ -644,25 +698,100 @@ export function createDemoBackend(storageKey = 'avoflow-demo-v1') {
   };
 
   // ---------- ตีออก ----------
+  // รุ่น 2.5: กรอกน้ำหนักแยกความสุกเองได้ (ระบบปรับความสุกในสต็อกให้ตอนยืนยัน) · ตีออกเกินยอดได้ (Lot ติดลบ) เว้นแต่ปิดในตั้งค่า
+  //           แก้ใบที่ตีออกแล้วแต่ปลายทางยังไม่รับได้ (กลับรายการเดิมแล้วตัดใหม่) · รายละเอียดทั้งใบ/ต่อรายการ
+  const linesOf = (id) => db.dispatch_lines.filter((x) => x.dispatch_id === id).sort((a, b) => a.line_no - b.line_no);
+  const dispatchShortages = (id) => {
+    const d = byId('dispatches', id); const g = new Map();
+    linesOf(id).forEach((dl) => g.set(dl.lot_id, R2((g.get(dl.lot_id) || 0) + dl.kg)));
+    return [...g.entries()].map(([lot, need_]) => { const total = lotTotal(d.from_site_id, d.from_zone, lot); const free = lotFree(d.from_site_id, d.from_zone, lot, d.id);
+      return { lot_id: lot, lot_code: byId('lots', lot).code, need_kg: need_, total_kg: total, reserved_kg: R2(total - free), free_kg: free, short_kg: R2(need_ - Math.max(free, 0)), after_kg: R2(total - need_) }; })
+      .filter((x) => x.need_kg > x.free_kg).sort((a, b) => cmp(a.lot_code, b.lot_code));
+  };
+  const shortText = (sh) => sh.map((x) => `${x.lot_code} ขาด ${fmt(x.short_kg)} กก. (มี ${fmt(Math.max(x.free_kg, 0))} ขอ ${fmt(x.need_kg)}${x.reserved_kg > 0 ? ', ใบร่างอื่นจองไว้ ' + fmt(x.reserved_kg) : ''})`).join(' · ');
+  // ด่านตรวจยอดก่อนตัดสต็อก: ปิด "ตีออกเกินยอด" = ห้ามจ่ายเกิน · เปิด = ผู้ยืนยันต้องรับทราบว่า Lot ใดจะติดลบ
+  // confirm = true (ยืนยันโดยไม่ระบุรายการ) หรือ ข้อความรายการที่ผู้ยืนยันเห็นบนจอ — ถ้ายอดเปลี่ยนไปจากที่เห็น ระบบจะให้ยืนยันใหม่
+  const shortGate = (sh, confirm) => {
+    if (!sh.length) return;
+    if (!allowNegative()) fail('ห้ามจ่ายเกินยอดพร้อมใช้: ' + shortText(sh));
+    const ok = confirm === true || (typeof confirm === 'string' && confirm === shortText(sh));
+    if (!ok) fail('ต้องยืนยันการตีออกเกินยอด (Lot จะติดลบ): ' + shortText(sh));
+  };
+  // ตัดสต็อกของใบตีออก: (1) ปรับความสุกให้ตรงกับที่กรอก (2) ตัดออกจากต้นทาง → เข้าระหว่างทาง (3) หักกลบยอดบวก/ลบใน Lot
+  function dispatchPost(u, d, neg, at = null) {
+    const dest = byId('customers', d.customer_id)?.name ?? site(d.to_site_id)?.name; const lines = linesOf(d.id);
+    G.noNet = true; G.allowNeg = !!neg;
+    if (d.from_zone !== 'frozen') lines.filter((dl) => dl.ripeness !== 'na').forEach((dl) => {
+      let short = R2(dl.kg - Math.max(bal(d.from_site_id, d.from_zone, dl.lot_id, dl.ripeness)?.kg || 0, 0));
+      if (short <= 0) return;
+      const t = RIP.indexOf(dl.ripeness);
+      // ลำดับที่ดึงมาชดเชย: ความสุกที่ดิบกว่า (ใกล้ → ไกล) ก่อน แล้วจึงที่สุกกว่า (ใกล้ → ไกล)
+      const cand = [...RIP.slice(0, t).reverse(), ...RIP.slice(t + 1)];
+      // รอบ 1 เว้นยอดที่ใบร่างอื่นจองไว้ในความสุกนั้น · รอบ 2 (ยังไม่พอ) ใช้ได้ทั้งหมด เพราะการจองนับรวมระดับ Lot
+      for (const pass of [1, 2]) for (const rk of cand) {
+        if (short <= 0) break;
+        const src = bal(d.from_site_id, d.from_zone, dl.lot_id, rk);
+        if (!src || src.kg <= 0) continue;
+        const own = lines.find((x) => x.lot_id === dl.lot_id && x.ripeness === rk)?.kg || 0;
+        const c = Math.min(short, R2(src.kg - own - (pass === 1 ? reserved(d.from_site_id, d.from_zone, dl.lot_id, rk, d.id) : 0)));
+        if (c <= 0) continue;
+        const mv = Math.min(src.baskets, Math.round(src.baskets * c / src.kg));
+        const why = `ปรับความสุกตอนตีออก: ${ripL(rk)} → ${ripL(dl.ripeness)}`;
+        const r = move(d.from_site_id, d.from_zone, dl.lot_id, rk, -c, -mv, 0, 'RIPEN_OUT', 'DISPATCH', d.id, d.doc_no, u.id, why, null, u.id, dest, at);
+        move(d.from_site_id, d.from_zone, dl.lot_id, dl.ripeness, c, -r.d_baskets, 0, 'RIPEN_IN', 'DISPATCH', d.id, d.doc_no, u.id, why, null, u.id, dest, at);
+        short = R2(short - c);
+      }
+      if (short > 0 && !neg) fail(`ห้ามจ่ายเกินยอดพร้อมใช้: ${byId('lots', dl.lot_id).code} มีไม่พอ ขาด ${fmt(short)} กก.`);
+    });
+    lines.forEach((dl) => {
+      move(d.from_site_id, d.from_zone, dl.lot_id, dl.ripeness, -dl.kg, -dl.baskets, -dl.bags, 'SHIP_OUT', 'DISPATCH', d.id, d.doc_no, u.id, d.note, null, u.id, dest, at);
+      // ระหว่างทางรับตามจำนวนที่กรอกในใบ (จำนวนตะกร้า/ถุงในใบคือของที่ส่งจริง)
+      move(d.from_site_id, 'transit', dl.lot_id, dl.ripeness, dl.kg, dl.baskets, dl.bags, 'TRANSIT_IN', 'DISPATCH', d.id, d.doc_no, u.id, d.note, null, u.id, dest, at);
+    });
+    G.allowNeg = false; G.noNet = false;
+    [...new Set(lines.map((x) => x.lot_id))].sort((a, b) => a - b).forEach((lot) => netLot(d.from_site_id, d.from_zone, lot, u.id, d.id, d.doc_no, u.id, at));
+  }
+  // กลับรายการสต็อกของใบที่ตีออกแล้ว: หักล้างผลรวมของทุกรายการเคลื่อนไหวของใบนั้น
+  function dispatchUnship(u, d) {
+    const dest = byId('customers', d.customer_id)?.name ?? site(d.to_site_id)?.name; const g = new Map();
+    db.movements.filter((m) => m.doc_type === 'DISPATCH' && m.doc_id === d.id).forEach((m) => {
+      const k = [m.site_id, m.zone, m.lot_id, m.ripeness, m.mtype].join('|');
+      const x = g.get(k) || { site_id: m.site_id, zone: m.zone, lot_id: m.lot_id, ripeness: m.ripeness, mtype: m.mtype, kg: 0, bk: 0, bg: 0 };
+      x.kg = R2(x.kg + m.d_kg); x.bk += m.d_baskets; x.bg += m.d_bags; g.set(k, x); });
+    G.noNet = true; G.allowNeg = true;
+    [...g.values()].filter((x) => x.kg !== 0 || x.bk !== 0 || x.bg !== 0)
+      .sort((a, b) => ((b.zone === 'transit') - (a.zone === 'transit')) || a.kg - b.kg || a.lot_id - b.lot_id || cmp(a.ripeness, b.ripeness) || cmp(a.mtype, b.mtype))
+      .forEach((x) => move(x.site_id, x.zone, x.lot_id, x.ripeness, -x.kg, -x.bk, -x.bg, x.mtype, 'DISPATCH', d.id, d.doc_no, u.id, 'แก้ไขใบตีออก: กลับรายการเดิม', null, u.id, dest, d.shipped_at));
+    G.allowNeg = false; G.noNet = false;
+  }
   function shipInternal(u, id) {
     const d = byId('dispatches', id); if (!d) fail('ไม่พบใบตีออก');
     if (d.status !== 'draft') fail('ใบตีออก ' + d.doc_no + ' ถูกยืนยันส่งไปแล้ว (กันกดซ้ำ)');
     if (!isApprover(u, d.from_site_id)) fail('ต้องให้ผู้จัดการคลัง/สาขา ผู้บริหาร หรือ Admin ยืนยันการตีออก');
-    const dest = byId('customers', d.customer_id)?.name ?? site(d.to_site_id)?.name;
-    db.dispatch_lines.filter((x) => x.dispatch_id === d.id).sort((a, b) => a.line_no - b.line_no).forEach((dl) => {
-      const r = move(d.from_site_id, d.from_zone, dl.lot_id, dl.ripeness, -dl.kg, -dl.baskets, -dl.bags, 'SHIP_OUT', 'DISPATCH', d.id, d.doc_no, u.id, d.note, null, u.id, dest);
-      move(d.from_site_id, 'transit', dl.lot_id, dl.ripeness, dl.kg, -r.d_baskets, -r.d_bags, 'TRANSIT_IN', 'DISPATCH', d.id, d.doc_no, u.id, d.note, null, u.id, dest);
-      dl.baskets = -r.d_baskets;
-    });
+    dispatchPost(u, d, allowNegative());
     Object.assign(d, { status: 'shipped', shipped_by: u.id, shipped_at: nowIso() });
     audit(u.id, 'ship', 'dispatch', d.id, null);
   }
   A.api_dispatch_save = (p) => {
-    const u = cur(); need(u, ['warehouse', 'branch']);
+    const u = cur(); const did = num(p, 'id'); let old = null; let reedit = false;
     const kind = p.kind || 'transfer'; const from = num(p, 'from_site_id'); let to = num(p, 'to_site_id'); let cust = num(p, 'customer_id');
+    if (did != null) {
+      old = byId('dispatches', did); if (!old) fail('ไม่พบใบตีออก');
+      if (old.status === 'shipped') {
+        // แก้ใบที่ตีออกแล้ว (ปลายทางยังไม่รับ): เฉพาะผู้ที่ยืนยันตีออกได้ และต้องมีเหตุผล
+        reedit = true;
+        if (!isApprover(u, old.from_site_id)) fail('ต้องให้ผู้จัดการคลัง/สาขา ผู้บริหาร หรือ Admin แก้ไขใบที่ตีออกแล้ว');
+        if (!txt(p, 'edit_reason')) fail('กรุณาระบุเหตุผลที่แก้ไขใบที่ตีออกแล้ว');
+        if (kind !== old.kind || from !== old.from_site_id || (txt(p, 'from_zone') || old.from_zone) !== old.from_zone) fail('ใบที่ตีออกแล้วเปลี่ยนประเภท/ต้นทางไม่ได้');
+        const lids = linesOf(old.id).map((x) => x.id);
+        if (db.cases.some((c) => c.dispatch_id === old.id) || db.invoice_lines.some((il) => lids.includes(il.dispatch_line_id)) || db.return_lines.some((rl) => lids.includes(rl.dispatch_line_id)))
+          fail('ใบนี้มีเอกสารอ้างอิงแล้ว (ส่วนต่าง/บิล/รับคืน) จึงแก้ไขไม่ได้');
+      } else if (old.status !== 'draft') fail('แก้ไขได้เฉพาะใบร่าง หรือใบที่ตีออกแล้วแต่ปลายทางยังไม่ยืนยันรับ');
+    }
+    if (!reedit) need(u, ['warehouse', 'branch']);
     const fk = site(from)?.kind; if (!fk) fail('กรุณาเลือกต้นทาง');
-    needSite(u, from);
-    const fz = txt(p, 'from_zone') || (fk === 'warehouse' ? 'main' : 'back');
+    if (!reedit) needSite(u, from);
+    const fz = txt(p, 'from_zone') || (reedit ? old.from_zone : fk === 'warehouse' ? 'main' : 'back');
     if ((fk === 'warehouse' && !['main', 'frozen'].includes(fz)) || (fk === 'branch' && !['front', 'back', 'frozen'].includes(fz))) fail('จุดจัดเก็บต้นทางไม่ถูกต้อง');
     let tz = null;
     if (kind === 'transfer') {
@@ -676,39 +805,100 @@ export function createDemoBackend(storageKey = 'avoflow-demo-v1') {
     const docDate = txt(p, 'doc_date') || today();
     if (!/^\d{4}-\d{2}-\d{2}$/.test(docDate)) fail('วันที่ไม่ถูกต้อง');
     if (docDate > bkkDate(Date.now() + 7 * 86400e3)) fail('วันที่ตีออกล่วงหน้าได้ไม่เกิน 7 วัน');
-    let d; const did = num(p, 'id');
+    let d; let pre = {}; let oldKg = 0; let touched = [];
     const vals = { kind, from_site_id: from, from_zone: fz, to_site_id: to, to_zone: tz, customer_id: cust, carrier: txt(p, 'carrier'), vehicle: txt(p, 'vehicle'), packer: txt(p, 'packer'), note: txt(p, 'note'),
-      doc_date: docDate, ship_evidence: txt(p, 'ship_evidence') };
+      doc_date: docDate, ship_evidence: txt(p, 'ship_evidence'), details: txt(p, 'details') };
     if (did == null) d = ins('dispatches', { doc_no: nextNo(kind === 'sale' ? 'OUT' : 'TR'), ...vals, status: 'draft', created_by: u.id, created_at: nowIso(),
-      shipped_by: null, shipped_at: null, receiver_name: null, received_by: null, received_at: null, receive_note: null, evidence: null });
-    else { d = byId('dispatches', did); if (d && !canAct(u, d.from_site_id)) fail('ไม่มีสิทธิ์แก้ไขใบตีออกของสถานที่อื่น');
-      if (!d || d.status !== 'draft') fail('แก้ไขได้เฉพาะใบตีออกที่ยังเป็นร่าง'); Object.assign(d, vals);
+      shipped_by: null, shipped_at: null, receiver_name: null, received_by: null, received_at: null, receive_note: null, evidence: null,
+      edited_by: null, edited_at: null, edit_reason: null });
+    else { d = old;
+      if (!reedit && !canAct(u, d.from_site_id)) fail('ไม่มีสิทธิ์แก้ไขใบตีออกของสถานที่อื่น');
+      if (reedit) {
+        // จำยอดรวมของ Lot ที่เกี่ยวข้องก่อนแก้ ไว้เทียบว่าการแก้ทำให้ Lot ใดติดลบมากขึ้นหรือไม่
+        touched = [...new Set([...linesOf(d.id).map((x) => x.lot_id), ...p.lines.map((x) => num(x, 'lot_id')).filter((x) => x != null)])];
+        touched.forEach((lot) => { if (db.balances.some((b) => b.site_id === d.from_site_id && b.zone === d.from_zone && b.lot_id === lot)) pre[lot] = lotTotal(d.from_site_id, d.from_zone, lot); });
+        oldKg = R2(linesOf(d.id).reduce((a, x) => a + x.kg, 0));
+        dispatchUnship(u, d);
+      }
+      Object.assign(d, vals);
       db.dispatch_lines = db.dispatch_lines.filter((x) => x.dispatch_id !== d.id); }
     p.lines.forEach((ln, idx) => {
-      const i = idx + 1; const lot = db.lots.find((l) => l.id === num(ln, 'lot_id') && l.status === 'active'); const kg = num(ln, 'kg');
+      const i = idx + 1; const lot = db.lots.find((l) => l.id === num(ln, 'lot_id') && l.status === 'active'); const kg0 = num(ln, 'kg'); const kg = kg0 == null ? null : R2(kg0);
       if (!lot) fail(`รายการที่ ${i}: ไม่พบ Lot ที่ใช้งานได้`);
       const rip = lot.product === 'frozen' ? 'na' : ln.ripeness || 'raw';
+      if (lot.product !== 'frozen' && !RIP.includes(rip)) fail(`รายการที่ ${i}: สถานะความสุกไม่ถูกต้อง`);
       if ((lot.product === 'frozen') !== (fz === 'frozen')) fail(`รายการที่ ${i}: สินค้าแช่แข็งต้องตีออกจากจุดแช่แข็ง`);
       if (kg == null || kg <= 0) fail(`รายการที่ ${i}: กรุณาระบุน้ำหนัก (กก.)`);
       if (db.dispatch_lines.some((x) => x.dispatch_id === d.id && x.lot_id === lot.id && x.ripeness === rip)) fail(`Lot ${lot.code} (${ripL(rip)}) ถูกเลือกซ้ำ`);
-      const avail = R2((bal(from, fz, lot.id, rip)?.kg || 0) - reserved(from, fz, lot.id, rip, d.id));
-      if (kg > avail) fail(`ห้ามจ่ายเกินยอดพร้อมใช้: ${lot.code} (${ripL(rip)}) พร้อมจ่าย ${fmt(Math.max(avail, 0))} กก. แต่ขอ ${fmt(kg)} กก.`);
-      if ((int(ln, 'pieces') ?? 0) < 0) fail(`รายการที่ ${i}: จำนวนลูกไม่ถูกต้อง`);
+      if (!db.balances.some((b) => b.site_id === from && b.zone === fz && b.lot_id === lot.id)) fail(`Lot ${lot.code} ไม่เคยมีสต็อกที่จุดนี้ จึงตีออกจากที่นี่ไม่ได้`);
+      if ((int(ln, 'pieces') ?? 0) < 0 || (int(ln, 'baskets') ?? 0) < 0 || (int(ln, 'bags') ?? 0) < 0) fail(`รายการที่ ${i}: จำนวนตะกร้า/ถุง/ลูกไม่ถูกต้อง`);
       ins('dispatch_lines', { dispatch_id: d.id, line_no: i, lot_id: lot.id, ripeness: rip, kg: R2(kg), baskets: int(ln, 'baskets') ?? 0, bags: int(ln, 'bags') ?? 0,
-        received_kg: null, received_baskets: null, received_bags: null, billed_kg: 0, pieces: int(ln, 'pieces') || null, returned_kg: 0 });
+        received_kg: null, received_baskets: null, received_bags: null, billed_kg: 0, pieces: int(ln, 'pieces') || null, returned_kg: 0, detail: txt(ln, 'detail') });
     });
-    audit(u.id, did == null ? 'create' : 'update', 'dispatch', d.id, null);
-    if (bool(p, 'ship', false)) shipInternal(u, d.id);
-    return dispatchJson(d.id);
+    if (reedit) {
+      // ต้องยืนยัน (หรือถูกห้าม) เฉพาะ Lot ที่การแก้ครั้งนี้ทำให้ยอดลดลงกว่าก่อนแก้ — Lot ที่ติดลบอยู่เดิมและไม่แย่ลงแก้ได้เลย
+      shortGate(dispatchShortages(d.id).filter((x) => x.after_kg < (pre[x.lot_id] ?? 0)), p.confirm_negative);
+      dispatchPost(u, d, true, d.shipped_at);
+      const now_ = new Set(linesOf(d.id).map((x) => x.lot_id));
+      touched.filter((lot) => !now_.has(lot)).sort((a, b) => a - b).forEach((lot) => netLot(from, fz, lot, u.id, d.id, d.doc_no, u.id, d.shipped_at));
+      // กันพลาดในโหมดห้ามจ่ายเกิน: หลังตัดสต็อกแล้ว Lot ที่เกี่ยวข้องต้องไม่ติดลบมากกว่าก่อนแก้
+      if (!allowNegative()) { const bad = touched.filter((lot) => db.balances.some((b) => b.site_id === from && b.zone === fz && b.lot_id === lot) && lotTotal(from, fz, lot) < Math.min(pre[lot] ?? 0, 0)).map((lot) => byId('lots', lot).code);
+        if (bad.length) fail('ห้ามจ่ายเกินยอดพร้อมใช้: ' + bad.join(', ')); }
+      Object.assign(d, { edited_by: u.id, edited_at: nowIso(), edit_reason: txt(p, 'edit_reason') });
+      audit(u.id, 'edit_shipped', 'dispatch', d.id, { reason: txt(p, 'edit_reason'), kg_before: oldKg, kg_after: R2(linesOf(d.id).reduce((a, x) => a + x.kg, 0)) });
+    } else {
+      if (!allowNegative()) shortGate(dispatchShortages(d.id), false);
+      audit(u.id, did == null ? 'create' : 'update', 'dispatch', d.id, null);
+      if (bool(p, 'ship', false)) {
+        if (!isApprover(u, d.from_site_id)) fail('ต้องให้ผู้จัดการคลัง/สาขา ผู้บริหาร หรือ Admin ยืนยันการตีออก');
+        shortGate(dispatchShortages(d.id), p.confirm_negative); shipInternal(u, d.id); }
+    }
+    return nocost(u, dispatchJson(d.id));
   };
-  A.api_dispatch_ship = (p) => { const u = cur(); need(u, ['warehouse', 'branch', 'executive']); shipInternal(u, num(p, 'id')); return dispatchJson(num(p, 'id')); };
+  A.api_dispatch_ship = (p) => { const u = cur(); need(u, ['warehouse', 'branch', 'executive']); const d = byId('dispatches', num(p, 'id'));
+    if (d && d.status === 'draft') {
+      // ตรวจสิทธิ์ก่อนบอกยอดขาด (ผู้ใช้สถานที่อื่นต้องไม่เห็นยอดสต็อกจากข้อความ)
+      if (!isApprover(u, d.from_site_id)) fail('ต้องให้ผู้จัดการคลัง/สาขา ผู้บริหาร หรือ Admin ยืนยันการตีออก');
+      shortGate(dispatchShortages(d.id), p.confirm_negative); }
+    shipInternal(u, num(p, 'id')); return nocost(u, dispatchJson(num(p, 'id'))); };
+  // รายการ Lot สำหรับหน้าตีออก: 1 แถวต่อ Lot แยกยอดตามความสุก + ยอดว่างระดับ Lot (หักที่ใบร่างอื่นจองไว้)
+  A.api_dispatch_lots = (p) => {
+    const u = cur(); const sid = num(p, 'site_id'); const z = txt(p, 'zone') || 'main';
+    if (sid == null || !canSee(u, sid)) fail('ไม่มีสิทธิ์ดูสต็อกของสถานที่นี้');
+    const did = num(p, 'dispatch_id'); const dd = byId('dispatches', did);
+    const back = dd && dd.status === 'shipped' && dd.from_site_id === sid && dd.from_zone === z ? dd.id : null;
+    const zero = bool(p, 'include_zero', false); const days = Math.min(Math.max(int(p, 'days') ?? 30, 1), 365);
+    const adj = new Map();
+    if (back != null) db.movements.filter((m) => m.doc_type === 'DISPATCH' && m.doc_id === back && m.site_id === sid && m.zone === z).forEach((m) => {
+      const k = m.lot_id + '|' + m.ripeness; const x = adj.get(k) || { kg: 0, bk: 0, bg: 0 }; x.kg = R2(x.kg + m.d_kg); x.bk += m.d_baskets; x.bg += m.d_bags; adj.set(k, x); });
+    const lots = new Map();
+    db.balances.filter((b) => b.site_id === sid && b.zone === z).forEach((b) => {
+      const a = adj.get(b.lot_id + '|' + b.ripeness) || { kg: 0, bk: 0, bg: 0 };
+      if (!lots.has(b.lot_id)) lots.set(b.lot_id, []);
+      lots.get(b.lot_id).push({ ripeness: b.ripeness, kg: R2(b.kg - a.kg), baskets: Math.max(b.baskets - a.bk, 0), bags: Math.max(b.bags - a.bg, 0) }); });
+    const resOf = (lot, rip) => R2(db.dispatch_lines.filter((dl) => { const x = byId('dispatches', dl.dispatch_id);
+      return x.status === 'draft' && x.from_site_id === sid && x.from_zone === z && x.id !== did && dl.lot_id === lot && (rip == null || dl.ripeness === rip); }).reduce((a, dl) => a + dl.kg, 0));
+    const since = Date.now() - days * 86400e3;
+    return [...lots.entries()].map(([lotId, rows]) => {
+      const l = byId('lots', lotId); const total = R2(rows.reduce((a, r) => a + r.kg, 0)); const rsv = resOf(lotId, null);
+      return { l, total, top: Math.max(0, ...rows.filter((r) => r.kg > 0).map((r) => RIP_RANK[r.ripeness])),
+        out: { lot_id: l.id, lot_code: l.code, product: l.product, variety: byId('varieties', l.variety_id)?.name ?? null, size: byId('sizes', l.size_id)?.name ?? null,
+          supplier: byId('suppliers', l.supplier_id)?.name ?? null, received_at: l.received_at, age_days: ageDays(l), avg_g: l.avg_g ?? null,
+          total_kg: total, reserved_kg: rsv, free_kg: R2(total - rsv), baskets: rows.reduce((a, r) => a + r.baskets, 0), bags: rows.reduce((a, r) => a + r.bags, 0),
+          rip: rows.filter((r) => r.kg !== 0 || r.baskets > 0 || r.bags > 0).sort((a, b) => RIP_RANK[a.ripeness] - RIP_RANK[b.ripeness]).map((r) => ({ ...r, reserved_kg: resOf(lotId, r.ripeness) })) } }; })
+      .filter(({ l, total, out }) => (l.product === 'frozen') === (z === 'frozen')
+        && (total !== 0 || out.bags > 0 || (did != null && db.dispatch_lines.some((dl) => dl.dispatch_id === did && dl.lot_id === l.id))
+          || (zero && l.status === 'active' && db.movements.some((m) => m.site_id === sid && m.zone === z && m.lot_id === l.id && new Date(m.recorded_at).getTime() > since))))
+      .sort((a, b) => ((b.total > 0) - (a.total > 0)) || b.top - a.top || cmp(a.l.received_at, b.l.received_at) || a.l.id - b.l.id)
+      .map((x) => x.out);
+  };
   A.api_dispatch_cancel = (p) => {
     const u = cur(); need(u, ['warehouse', 'branch']); const d = byId('dispatches', num(p, 'id'));
     if (!d || d.status !== 'draft') fail('ยกเลิกได้เฉพาะใบตีออกที่ยังเป็นร่าง (ถ้าส่งแล้วให้ใช้การรับคืน/สรุปส่วนต่าง)');
     needSite(u, d.from_site_id);
     d.status = 'cancelled'; d.note = (d.note ? d.note + ' · ' : '') + 'ยกเลิก: ' + (txt(p, 'reason') || '-');
     audit(u.id, 'cancel', 'dispatch', d.id, p);
-    return dispatchJson(d.id);
+    return nocost(u, dispatchJson(d.id));
   };
   A.api_dispatch_receive = (p) => {
     const u = cur(); const d = byId('dispatches', num(p, 'id')); if (!d) fail('ไม่พบใบตีออก');
@@ -718,6 +908,9 @@ export function createDemoBackend(storageKey = 'avoflow-demo-v1') {
     if (!txt(p, 'receiver_name')) fail('กรุณาระบุชื่อผู้รับสินค้า');
     if ((setting('options').require_receive_photo ?? true) && !txt(p, 'evidence')) fail('กรุณาแนบรูปสภาพสินค้าเมื่อถึงปลายทาง');
     const src = site(d.from_site_id).name; const at = p.received_at ? new Date(p.received_at).toISOString() : nowIso(); let partial = false;
+    // รายการที่ส่งมาต้องเป็นบรรทัดปัจจุบันของใบ (ใบถูกแก้ไขหลังเปิดหน้ารับ → เลขบรรทัดเปลี่ยน ต้องเปิดใบใหม่)
+    const ids = new Set(linesOf(d.id).map((x) => x.id));
+    if ((p.lines || []).some((x) => !ids.has(num(x, 'id')))) fail('ใบนี้ถูกแก้ไขหลังจากเปิดหน้ารับ กรุณาเปิดใบใหม่แล้วตรวจรับอีกครั้ง');
     db.dispatch_lines.filter((x) => x.dispatch_id === d.id).sort((a, b) => a.line_no - b.line_no).forEach((dl) => {
       const ln = (p.lines || []).find((x) => Number(x.id) === dl.id);
       const rk = num(ln, 'received_kg') ?? dl.kg; let rb = Math.min(int(ln, 'received_baskets') ?? dl.baskets, dl.baskets); let rg = Math.min(int(ln, 'received_bags') ?? dl.bags, dl.bags);
@@ -733,7 +926,7 @@ export function createDemoBackend(storageKey = 'avoflow-demo-v1') {
     });
     Object.assign(d, { status: partial ? 'partial' : 'received', receiver_name: txt(p, 'receiver_name'), received_by: u.id, received_at: at, receive_note: txt(p, 'note'), evidence: txt(p, 'evidence') });
     audit(u.id, 'receive', 'dispatch', d.id, { partial });
-    return dispatchJson(d.id);
+    return nocost(u, dispatchJson(d.id));
   };
   A.api_case_resolve = (p) => {
     const u = cur(); const c = byId('cases', num(p, 'id')); if (!c) fail('ไม่พบงานตรวจสอบ');
@@ -752,7 +945,7 @@ export function createDemoBackend(storageKey = 'avoflow-demo-v1') {
     Object.assign(c, { status: 'resolved', outcome: o, resolve_note: txt(p, 'note'), evidence: txt(p, 'evidence'), resolved_by: u.id, resolved_at: nowIso() });
     if (!db.cases.some((x) => x.dispatch_id === d.id && x.status === 'open')) d.status = 'closed';
     audit(u.id, 'resolve', 'case', c.id, p);
-    return dispatchJson(d.id);
+    return nocost(u, dispatchJson(d.id));
   };
   A.api_dispatches = (p) => {
     const u = cur(); const q = txt(p, 'q')?.toLowerCase(); const sts = txt(p, 'status')?.split(',');
@@ -786,7 +979,7 @@ export function createDemoBackend(storageKey = 'avoflow-demo-v1') {
     if (sid == null) return { site: null };
     if (!canSee(u, sid)) fail('ไม่มีสิทธิ์ดูสาขานี้');
     const zones = {};
-    db.balances.filter((b) => b.site_id === sid && b.zone !== 'transit' && (b.kg > 0 || b.bags > 0)).forEach((b) => {
+    db.balances.filter((b) => b.site_id === sid && b.zone !== 'transit' && (b.kg !== 0 || b.bags > 0)).forEach((b) => {
       zones[b.zone] = zones[b.zone] || {}; const g = (zones[b.zone][b.ripeness] = zones[b.zone][b.ripeness] || { ripeness: b.ripeness, kg: 0, baskets: 0, bags: 0, _lots: new Set() });
       g.kg = R2(g.kg + b.kg); g.baskets += b.baskets; g.bags += b.bags; g._lots.add(b.lot_id); });
     const zout = {};
@@ -976,6 +1169,12 @@ export function createDemoBackend(storageKey = 'avoflow-demo-v1') {
     const low = threshold('low_stock_kg', 200), near = threshold('near_ripe_days', 5), aging = threshold('aging_days', 7), pct = threshold('weight_variance_pct', 5),
       std = threshold('std_basket_kg', 20), hrs = threshold('receive_deadline_hours', 4); const res = [];
     const B = db.balances.map((b) => ({ ...b, l: byId('lots', b.lot_id), st: site(b.site_id) }));
+    // ยอด Lot ติดลบ (ตีออกเกินยอดที่บันทึกไว้) รอเคลียร์
+    const negs = new Map();
+    B.filter((b) => b.zone !== 'transit').forEach((b) => { const k = b.site_id + '|' + b.zone + '|' + b.lot_id; const x = negs.get(k) || { b, kg: 0 }; x.kg = R2(x.kg + b.kg); negs.set(k, x); });
+    [...negs.values()].filter((x) => x.kg < 0 && canSee(u, x.b.site_id)).sort((a, b) => a.kg - b.kg || cmp(a.b.l.code, b.b.l.code))
+      .forEach(({ b, kg }) => res.push({ level: 'danger', kind: 'negative_stock', title: 'ยอด Lot ติดลบ รอเคลียร์', detail: `${b.l.code} · ${b.st.name} · ${zoneL(b.zone)} ติดลบ ${fmt(-kg)} กก.`,
+        lot_id: b.l.id, lot_code: b.l.code, site_id: b.site_id, zone: b.zone, kg }));
     B.filter((b) => b.ripeness === 'overripe' && b.kg > 0 && b.zone !== 'transit' && canSee(u, b.site_id)).forEach((b) => res.push({ level: 'danger', kind: 'overripe', title: 'สุกมาก เร่งระบาย/พิจารณาตัดทิ้ง', detail: `${b.l.code} · ${b.st.name} · ${zoneL(b.zone)} ${fmt(b.kg)} กก.`, lot_id: b.l.id, lot_code: b.l.code }));
     B.filter((b) => b.ripeness === 'ripe' && b.kg > 0 && b.st.kind === 'warehouse' && b.zone === 'main' && canSee(u, b.site_id)).forEach((b) => res.push({ level: 'warn', kind: 'ripe', title: 'สุกแล้ว ควรจ่ายก่อน', detail: `${b.l.code} · ${b.st.name} ${fmt(b.kg)} กก.`, lot_id: b.l.id, lot_code: b.l.code }));
     B.filter((b) => ['raw', 'breaking'].includes(b.ripeness) && b.kg > 0 && ['main', 'front', 'back'].includes(b.zone) && canSee(u, b.site_id) && ageDays(b.l) >= near
@@ -1002,6 +1201,13 @@ export function createDemoBackend(storageKey = 'avoflow-demo-v1') {
       .forEach((r) => res.push({ level: 'info', kind: 'pending_return', title: 'รออนุมัติรับคืน / เคลมจากลูกค้า', detail: `${r.doc_no} · ${byId('customers', r.customer_id).name} · ${r.reason}`, return_id: r.id }));
     if (u.role !== 'branch') db.returns.filter((r) => r.status === 'applied' && returnCreditKg(r.id) > 0)
       .forEach((r) => res.push({ level: 'warn', kind: 'credit_needed', title: 'ต้องออกใบลดหนี้', detail: `${r.doc_no} · ${byId('customers', r.customer_id).name} · คืน/เคลมส่วนที่ออกบิลแล้ว`, return_id: r.id }));
+    if (['admin', 'executive', 'warehouse'].includes(u.role)) {
+      db.purchase_orders.filter((po) => po.status === 'pending' && isApprover(u, po.site_id))
+        .forEach((po) => res.push({ level: 'info', kind: 'pending_po', title: 'ใบสั่งซื้อรออนุมัติ', detail: `${po.doc_no} · ${byId('suppliers', po.supplier_id).name} · ${fmt(poValue(po.id))} บาท`, po_id: po.id }));
+      const bm = budgetMonth(bkkDate(Date.now()).slice(0, 7));
+      if (bm.pct != null && bm.pct >= 90) res.push({ level: bm.over ? 'danger' : 'warn', kind: 'budget_over', title: bm.over ? 'ยอดจัดซื้อเกินงบเดือนนี้' : 'ยอดจัดซื้อใกล้เต็มงบ',
+        detail: `ใช้แล้ว ${bm.pct}% · รับแล้ว ${fmt(bm.received_value)} + รอรับ ${fmt(bm.open_po_value)} จากงบ ${fmt(bm.budget)} บาท`, month: bm.month });
+    }
     db.stocktakes.filter((t) => t.status === 'submitted' && canSee(u, t.site_id))
       .forEach((t) => res.push({ level: 'info', kind: 'pending_stocktake', title: 'ผลตรวจนับรออนุมัติ', detail: `${t.doc_no} · ${site(t.site_id).name}`, stocktake_id: t.id }));
     tasks(u).filter((t) => t.overdue && t.entity !== 'dispatch_receive')
@@ -1029,8 +1235,8 @@ export function createDemoBackend(storageKey = 'avoflow-demo-v1') {
       frozen_bags: B.filter((b) => b.zone === 'frozen' && canSee(u, b.site_id)).reduce((a, b) => a + b.bags, 0),
       lots_active: new Set(B.filter((b) => (b.kg > 0 || b.bags > 0) && b.zone !== 'transit' && canSee(u, b.site_id)).map((b) => b.lot_id)).size,
       by_ripeness: byRip,
-      by_variety: Object.entries(grp(whB.filter((b) => b.kg > 0), (b) => byId('varieties', b.l.variety_id)?.name || '-')).map(([v, x]) => ({ variety: v, kg: x.kg, baskets: x.bk })).sort((a, b) => b.kg - a.kg),
-      by_size: Object.entries(grp(whB.filter((b) => b.kg > 0), (b) => byId('sizes', b.l.size_id)?.name || '-')).map(([s, x]) => ({ size: s, kg: x.kg })).sort((a, b) => b.kg - a.kg),
+      by_variety: Object.entries(grp(whB.filter((b) => b.kg !== 0), (b) => byId('varieties', b.l.variety_id)?.name || '-')).filter(([, x]) => x.kg > 0).map(([v, x]) => ({ variety: v, kg: x.kg, baskets: x.bk })).sort((a, b) => b.kg - a.kg),
+      by_size: Object.entries(grp(whB.filter((b) => b.kg !== 0), (b) => byId('sizes', b.l.size_id)?.name || '-')).filter(([, x]) => x.kg > 0).map(([s, x]) => ({ size: s, kg: x.kg })).sort((a, b) => b.kg - a.kg),
       by_site: db.sites.filter((s) => s.active && canSee(u, s.id)).sort((a, b) => (a.kind === b.kind ? a.sort - b.sort || a.name.localeCompare(b.name) : a.kind === 'warehouse' ? -1 : 1))
         .map((s) => ({ site_id: s.id, site: s.name, kind: s.kind, kg: R2(B.filter((b) => b.site_id === s.id && b.zone !== 'transit').reduce((a, b) => a + b.kg, 0)),
           baskets: B.filter((b) => b.site_id === s.id && b.zone !== 'transit').reduce((a, b) => a + b.baskets, 0), bags: B.filter((b) => b.site_id === s.id && b.zone === 'frozen').reduce((a, b) => a + b.bags, 0) })),
@@ -1059,7 +1265,7 @@ export function createDemoBackend(storageKey = 'avoflow-demo-v1') {
   };
 
   const COLS = {
-    receipts: [['date', 'วันที่', 'date'], ['doc_no', 'เลขที่รับเข้า'], ['supplier', 'สวน', null, 1], ['province', 'จังหวัด', null, 1], ['lot', 'Lot'], ['variety', 'สายพันธุ์', null, 1], ['size', 'ไซส์', null, 1], ['ripeness', 'ความสุก', null, 1], ['baskets', 'ตะกร้า', 'num'], ['net_kg', 'ชั่งสุทธิ (กก.)', 'num'], ['rejected_kg', 'คัดออก (กก.)', 'num'], ['accepted_kg', 'รับจริง (กก.)', 'num'], ['unit_cost', 'ราคาซื้อ/กก.', 'money', 0, 1], ['cost', 'ต้นทุน (บาท)', 'money']],
+    receipts: [['date', 'วันที่', 'date'], ['month', 'เดือน', null, 1], ['doc_no', 'เลขที่รับเข้า'], ['po', 'ใบสั่งซื้อ'], ['supplier', 'สวน', null, 1], ['province', 'จังหวัด', null, 1], ['lot', 'Lot'], ['variety', 'สายพันธุ์', null, 1], ['size', 'ไซส์', null, 1], ['ripeness', 'ความสุก', null, 1], ['baskets', 'ตะกร้า', 'num'], ['net_kg', 'ชั่งสุทธิ (กก.)', 'num'], ['rejected_kg', 'คัดออก (กก.)', 'num'], ['accepted_kg', 'รับจริง (กก.)', 'num'], ['unit_cost', 'ราคาซื้อ/กก.', 'money', 0, 1], ['cost', 'ต้นทุน (บาท)', 'money']],
     dispatches: [['date', 'วันที่ส่ง', 'date'], ['doc_no', 'เลขที่'], ['kind', 'ประเภท', null, 1], ['from', 'ต้นทาง', null, 1], ['destination', 'ปลายทาง', null, 1], ['channel', 'ช่องทาง', null, 1], ['lot', 'Lot'], ['supplier', 'สวน', null, 1], ['variety', 'สายพันธุ์', null, 1], ['size', 'ไซส์', null, 1], ['kg', 'ส่ง (กก.)', 'num'], ['received_kg', 'รับจริง (กก.)', 'num'], ['variance_kg', 'ส่วนต่าง (กก.)', 'num'], ['status', 'สถานะ', null, 1]],
     stock: [['site', 'สถานที่', null, 1], ['zone', 'จุดจัดเก็บ', null, 1], ['lot', 'Lot'], ['supplier', 'สวน', null, 1], ['variety', 'สายพันธุ์', null, 1], ['size', 'ไซส์', null, 1], ['ripeness', 'ความสุก', null, 1], ['received', 'รับเข้า', 'date'], ['age_days', 'อายุ (วัน)', 'num', 0, 1], ['kg', 'คงเหลือ (กก.)', 'num'], ['baskets', 'ตะกร้า', 'num'], ['bags', 'ถุง', 'num'], ['value', 'มูลค่าทุน (บาท)', 'money']],
     sales: [['date', 'วันที่บิล', 'date'], ['doc_no', 'เลขที่บิล'], ['customer', 'ลูกค้า', null, 1], ['channel', 'ช่องทาง', null, 1], ['lot', 'Lot'], ['supplier', 'สวน', null, 1], ['variety', 'สายพันธุ์', null, 1], ['size', 'ไซส์', null, 1], ['kg', 'กก.', 'num'], ['price', 'ราคา/กก.', 'money', 0, 1], ['amount', 'ยอดขาย (บาท)', 'money'], ['cost', 'ต้นทุน (บาท)', 'money'], ['gp', 'กำไรขั้นต้น (บาท)', 'money']],
@@ -1077,7 +1283,7 @@ export function createDemoBackend(storageKey = 'avoflow-demo-v1') {
     if (k === 'receipts') { c = cols('receipts');
       db.receipt_lines.map((rl) => ({ rl, r: byId('receipts', rl.receipt_id) })).filter(({ r }) => r.status === 'confirmed' && inRange(r.received_at, f, t) && canSee(u, r.site_id))
         .sort((a, b) => (a.r.received_at < b.r.received_at ? -1 : a.r.received_at > b.r.received_at ? 1 : a.rl.line_no - b.rl.line_no))
-        .forEach(({ rl, r }) => { const s = byId('suppliers', r.supplier_id); rows.push({ date: bkkDate(r.received_at), doc_no: r.doc_no, supplier: s.name, province: s.province, lot: byId('lots', rl.lot_id).code,
+        .forEach(({ rl, r }) => { const s = byId('suppliers', r.supplier_id); rows.push({ date: bkkDate(r.received_at), month: bkkDate(r.received_at).slice(0, 7), doc_no: r.doc_no, po: byId('purchase_orders', r.po_id)?.doc_no ?? null, supplier: s.name, province: s.province, lot: byId('lots', rl.lot_id).code,
           variety: byId('varieties', rl.variety_id).name, size: byId('sizes', rl.size_id).name, ripeness: ripL(rl.ripeness), baskets: rl.baskets, net_kg: rl.net_kg, rejected_kg: rl.rejected_kg,
           accepted_kg: rl.accepted_kg, unit_cost: rl.unit_cost, cost: R2(rl.accepted_kg * rl.unit_cost) }); });
     } else if (k === 'dispatches') { c = cols('dispatches');
@@ -1090,7 +1296,7 @@ export function createDemoBackend(storageKey = 'avoflow-demo-v1') {
             kg: dl.kg, received_kg: dl.received_kg, variance_kg: dl.received_kg == null ? null : R2(dl.kg - dl.received_kg), status: d.status }); });
     } else if (['stock', 'branch', 'aging'].includes(k)) { c = cols('stock');
       rows = db.balances.map((b) => ({ b, l: byId('lots', b.lot_id), st: site(b.site_id) }))
-        .filter(({ b, l, st }) => (b.kg > 0 || b.bags > 0) && canSee(u, b.site_id) && (k !== 'branch' || st.kind === 'branch') && (k !== 'aging' || (l.product === 'fresh' && b.zone !== 'transit')))
+        .filter(({ b, l, st }) => (b.kg !== 0 || b.bags > 0) && canSee(u, b.site_id) && (k !== 'branch' || st.kind === 'branch') && (k !== 'aging' || (l.product === 'fresh' && b.zone !== 'transit')))
         .map(({ b, l, st }) => ({ _k: st.kind, site: st.name, zone: zoneL(b.zone), lot: l.code, supplier: byId('suppliers', l.supplier_id)?.name ?? null, variety: byId('varieties', l.variety_id)?.name ?? null,
           size: byId('sizes', l.size_id)?.name ?? null, ripeness: ripL(b.ripeness), received: bkkDate(l.received_at), age_days: ageDays(l), kg: b.kg, baskets: b.baskets, bags: b.bags, value: R2(b.kg * l.unit_cost) }))
         .sort((a, b) => (k === 'aging' ? b.age_days - a.age_days : 0) || (a._k < b._k ? 1 : a._k > b._k ? -1 : 0) || a.site.localeCompare(b.site) || a.zone.localeCompare(b.zone) || a.lot.localeCompare(b.lot))
@@ -1356,7 +1562,7 @@ export function createDemoBackend(storageKey = 'avoflow-demo-v1') {
     if (ex) fail('สถานที่นี้มีใบตรวจนับที่ยังไม่ปิดอยู่แล้ว (' + ex.doc_no + ')');
     const t = ins('stocktakes', { doc_no: nextNo('ST'), site_id: sid, zone: z ?? null, status: 'draft', note: txt(p, 'note'), created_by: u.id, created_at: nowIso(),
       submitted_by: null, submitted_at: null, decided_by: null, decided_at: null, decision_note: null });
-    db.balances.filter((b) => b.site_id === sid && b.zone !== 'transit' && (z == null || b.zone === z) && (b.kg > 0 || b.bags > 0))
+    db.balances.filter((b) => b.site_id === sid && b.zone !== 'transit' && (z == null || b.zone === z) && (b.kg !== 0 || b.bags > 0))
       .forEach((b) => ins('stocktake_lines', { stocktake_id: t.id, zone: b.zone, lot_id: b.lot_id, ripeness: b.ripeness, system_kg: b.kg, system_baskets: b.baskets, system_bags: b.bags,
         counted_kg: null, counted_baskets: null, counted_bags: null, added: false, note: null, counted_by: null, counted_at: null, count_system_kg: null, count_system_baskets: null, count_system_bags: null }));
     audit(u.id, 'create', 'stocktake', t.id, p);
@@ -1404,12 +1610,18 @@ export function createDemoBackend(storageKey = 'avoflow-demo-v1') {
     if ((t.submitted_by === u.id || t.created_by === u.id || db.stocktake_lines.some((x) => x.stocktake_id === t.id && x.counted_by === u.id)) && u.role !== 'admin') fail('ผู้นับไม่สามารถอนุมัติผลนับของตัวเองได้');
     const ok = bool(p, 'approve', false);
     if (!ok && !txt(p, 'note')) fail('กรุณาระบุเหตุผลที่ไม่อนุมัติ');
-    if (ok) db.stocktake_lines.filter((x) => x.stocktake_id === t.id).sort((a, b) => a.zone.localeCompare(b.zone) || a.lot_id - b.lot_id || a.ripeness.localeCompare(b.ripeness)).forEach((x) => {
-      const dk = R2(x.counted_kg - (x.count_system_kg ?? x.system_kg)); const dbk = x.counted_baskets == null ? 0 : x.counted_baskets - (x.count_system_baskets ?? x.system_baskets);
-      const dg = x.counted_bags == null ? 0 : x.counted_bags - (x.count_system_bags ?? x.system_bags);
-      if (dk < 0) needFree(t.site_id, x.zone, x.lot_id, x.ripeness, -dk);
-      move(t.site_id, x.zone, x.lot_id, x.ripeness, dk, dbk, dg, 'COUNT_ADJUST', 'STOCKTAKE', t.id, t.doc_no, t.submitted_by, x.note || 'ตรวจนับ', null, u.id);
-    });
+    if (ok) {
+      // ปรับทีละความสุกตามผลนับ (ปิดการหักกลบอัตโนมัติระหว่างปรับ) แล้วค่อยหักกลบยอดบวก/ลบที่ยังค้างใน Lot
+      const sl = db.stocktake_lines.filter((x) => x.stocktake_id === t.id).sort((a, b) => a.zone.localeCompare(b.zone) || a.lot_id - b.lot_id || a.ripeness.localeCompare(b.ripeness));
+      G.noNet = true;
+      sl.forEach((x) => {
+        const dk = R2(x.counted_kg - (x.count_system_kg ?? x.system_kg)); const dbk = x.counted_baskets == null ? 0 : x.counted_baskets - (x.count_system_baskets ?? x.system_baskets);
+        const dg = x.counted_bags == null ? 0 : x.counted_bags - (x.count_system_bags ?? x.system_bags);
+        move(t.site_id, x.zone, x.lot_id, x.ripeness, dk, dbk, dg, 'COUNT_ADJUST', 'STOCKTAKE', t.id, t.doc_no, t.submitted_by, x.note || 'ตรวจนับ', null, u.id);
+      });
+      G.noNet = false;
+      [...new Set(sl.map((x) => x.zone + '|' + x.lot_id))].forEach((k) => { const [z, lot] = k.split('|'); netLot(t.site_id, z, Number(lot), t.submitted_by, t.id, t.doc_no, u.id); });
+    }
     Object.assign(t, { status: ok ? 'approved' : 'rejected', decided_by: u.id, decided_at: nowIso(), decision_note: txt(p, 'note') });
     audit(u.id, ok ? 'approve' : 'reject', 'stocktake', t.id, p);
     return stocktakeJson(t.id, u.role !== 'branch');
@@ -1447,6 +1659,8 @@ export function createDemoBackend(storageKey = 'avoflow-demo-v1') {
       `ของที่คืน/เคลม ${fmt(returnCreditKg(r.id))} กก. เคยออกบิลแล้ว — ออกใบลดหนี้อ้างอิงบิลเดิม`, 'ฝ่ายขาย', r.site_id, r.decided_at, addH(r.decided_at, h)));
     db.stocktakes.filter((s) => ['draft', 'submitted'].includes(s.status) && canSee(u, s.site_id)).forEach((s) => { const dr = s.status === 'draft'; const at = s.submitted_at || s.created_at;
       push('stocktake', s.id, s.doc_no, dr ? 'ตรวจนับสต็อก' : 'ผลตรวจนับรออนุมัติ', dr ? 'นับให้ครบทุกรายการ แล้วกดส่งอนุมัติ' : 'ผู้จัดการตรวจผลต่าง แล้วอนุมัติปรับยอด', dr ? 'พนักงานนับ' : 'ผู้จัดการ', s.site_id, at, addH(at, h)); });
+    if (['admin', 'executive', 'warehouse'].includes(u.role)) db.purchase_orders.filter((po) => po.status === 'pending' && canSee(u, po.site_id)).forEach((po) =>
+      push('po', po.id, po.doc_no, 'ใบสั่งซื้อรออนุมัติ', `${byId('suppliers', po.supplier_id).name} · ผู้จัดการ/ผู้บริหารตรวจราคาและปริมาณ แล้วอนุมัติ`, 'ผู้จัดการ/ผู้บริหาร', po.site_id, po.created_at, addH(po.created_at, h)));
     if (u.role !== 'branch') db.dispatches.filter((d) => d.kind === 'sale' && ['received', 'partial', 'closed'].includes(d.status)).forEach((d) => {
       const ls = db.dispatch_lines.filter((dl) => dl.dispatch_id === d.id && R2(dl.received_kg - (dl.returned_kg || 0)) > dl.billed_kg); if (!ls.length) return;
       push('bill', d.id, d.doc_no, 'ส่งมอบแล้ว รอออกบิล', `ค้างออกบิล ${fmt(ls.reduce((a, dl) => a + dl.received_kg - (dl.returned_kg || 0) - dl.billed_kg, 0))} กก.`, 'ฝ่ายขาย', d.from_site_id, d.received_at, addH(d.received_at, bh)); });
@@ -1476,7 +1690,7 @@ export function createDemoBackend(storageKey = 'avoflow-demo-v1') {
   // ---------- LINE (ตัวอย่างข้อความ) ----------
   A.api_line_preview = () => {
     const u = cur(); need(u, ['admin']);
-    const cfg = setting('line'); const kinds = cfg.kinds || ['overripe', 'ripe', 'near_ripe', 'aging', 'late', 'case', 'overdue', 'pending_adjust', 'pending_return', 'credit_needed', 'pending_stocktake', 'pending_receipt', 'low_stock'];
+    const cfg = setting('line'); const kinds = cfg.kinds || ['negative_stock', 'overripe', 'ripe', 'near_ripe', 'aging', 'late', 'case', 'overdue', 'pending_adjust', 'pending_return', 'credit_needed', 'pending_stocktake', 'pending_receipt', 'low_stock'];
     const lvl = { danger: 0, warn: 1, info: 2 };
     const items = alerts(sysUser()).filter((e) => kinds.includes(e.kind)).map((e, i) => ({ e, i })).sort((a, b) => lvl[a.e.level] - lvl[b.e.level] || a.i - b.i).map((x) => x.e);
     if (!items.length) return { text: null, keys: [], count: 0 };
@@ -1506,14 +1720,253 @@ export function createDemoBackend(storageKey = 'avoflow-demo-v1') {
     return res;
   };
 
+  // ---------- จัดซื้อ: ใบสั่งซื้อ + งบรายเดือน ----------
+  const poMonth = (po) => (po.expected_date || po.order_date).slice(0, 7);
+  const poLines = (id) => db.po_lines.filter((x) => x.po_id === id).sort((a, b) => a.line_no - b.line_no);
+  const poValue = (id) => R2(poLines(id).reduce((a, x) => a + R2(x.est_kg * x.price), 0));
+  const confirmedPoLines = (poId) => db.receipt_lines.filter((rl) => { const r = byId('receipts', rl.receipt_id); return r.po_id === poId && r.status === 'confirmed'; });
+  const poReceivedValue = (id) => R2(confirmedPoLines(id).reduce((a, rl) => a + rl.accepted_kg * rl.unit_cost, 0));
+  const poOpenValue = (id) => { const po = byId('purchase_orders', id); return ['approved', 'partial'].includes(po.status) ? Math.max(R2(poValue(id) - poReceivedValue(id)), 0) : 0; };
+  const poLineFor = (poId, v, s) => poLines(poId).filter((x) => x.variety_id === v && (x.size_id === s || x.size_id == null)).sort((a, b) => (a.size_id == null) - (b.size_id == null) || a.line_no - b.line_no)[0] || null;
+  function poRefresh(id) {
+    if (id == null) return; const po = byId('purchase_orders', id); if (!po || !['approved', 'partial', 'received'].includes(po.status)) return;
+    const tot = poLines(id).reduce((a, x) => a + x.est_kg, 0); const got = confirmedPoLines(id).reduce((a, rl) => a + rl.accepted_kg, 0);
+    po.status = got <= 0 ? 'approved' : got >= tot ? 'received' : 'partial';
+  }
+  function budgetMonth(m) {
+    const b = db.purchase_budgets.find((x) => x.month === m)?.amount ?? null;
+    const rls = db.receipt_lines.filter((rl) => { const r = byId('receipts', rl.receipt_id); return r.status === 'confirmed' && bkkDate(r.received_at).slice(0, 7) === m; });
+    const rv = R2(rls.reduce((a, rl) => a + rl.accepted_kg * rl.unit_cost, 0)); const kg = R2(rls.reduce((a, rl) => a + rl.accepted_kg, 0));
+    const pos = db.purchase_orders.filter((po) => ['approved', 'partial'].includes(po.status) && poMonth(po) === m);
+    const ov = R2(pos.reduce((a, po) => a + poOpenValue(po.id), 0));
+    return { month: m, budget: b, received_value: rv, received_kg: kg, receipts: new Set(rls.map((x) => x.receipt_id)).size, open_po_value: ov,
+      open_pos: pos.filter((po) => poOpenValue(po.id) > 0).length, total: R2(rv + ov), remaining: b == null ? null : R2(b - rv - ov),
+      pct: b > 0 ? R1((rv + ov) * 100 / b) : null, over: b != null && b < rv + ov };
+  }
+  const poJson = (id) => {
+    const po = byId('purchase_orders', id); if (!po) return null;
+    return { ...po, supplier: byId('suppliers', po.supplier_id).name, site: site(po.site_id).name, month: poMonth(po),
+      created_by_name: uname(po.created_by), approved_by_name: uname(po.approved_by), closed_by_name: uname(po.closed_by),
+      total_kg: R2(poLines(id).reduce((a, x) => a + x.est_kg, 0)), total_value: poValue(id),
+      received_kg: R2(confirmedPoLines(id).reduce((a, rl) => a + rl.accepted_kg, 0)), received_value: poReceivedValue(id), open_value: poOpenValue(id),
+      pending_receipts: db.receipts.filter((r) => r.po_id === id && ['draft', 'pending_check'].includes(r.status)).length,
+      lines: poLines(id).map((x) => ({ ...x, variety: byId('varieties', x.variety_id).name, size: byId('sizes', x.size_id)?.name ?? null, value: R2(x.est_kg * x.price),
+        received_kg: R2(db.receipt_lines.filter((rl) => rl.po_line_id === x.id && byId('receipts', rl.receipt_id).status === 'confirmed').reduce((a, rl) => a + rl.accepted_kg, 0)) })),
+      receipts: db.receipts.filter((r) => r.po_id === id && r.status !== 'cancelled').sort((a, b) => (a.received_at < b.received_at ? -1 : a.received_at > b.received_at ? 1 : a.id - b.id))
+        .map((r) => { const ls = db.receipt_lines.filter((x) => x.receipt_id === r.id);
+          return { id: r.id, doc_no: r.doc_no, status: r.status, received_at: r.received_at, kg: R2(ls.reduce((a, x) => a + (x.accepted_kg ?? x.net_kg), 0)),
+            value: R2(ls.reduce((a, x) => a + (x.accepted_kg ?? x.net_kg) * x.unit_cost, 0)) }; }),
+      budget: budgetMonth(poMonth(po)) };
+  };
+  A.api_po_save = (p) => {
+    const u = cur(); need(u, ['warehouse', 'executive']);
+    const sup = num(p, 'supplier_id'); if (sup == null || !byId('suppliers', sup)) fail('กรุณาเลือกสวน');
+    const sid = num(p, 'site_id') ?? (u.role === 'warehouse' ? u.site_id : null) ?? db.sites.filter((x) => x.kind === 'warehouse' && x.active).sort((a, b) => a.sort - b.sort || a.id - b.id)[0]?.id;
+    if (sid == null || site(sid)?.kind !== 'warehouse') fail('กรุณาเลือกคลังที่จะรับของ');
+    if (u.role === 'warehouse') needSite(u, sid);
+    const od = txt(p, 'order_date') || today(); const ed = txt(p, 'expected_date');
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(od) || (ed && !/^\d{4}-\d{2}-\d{2}$/.test(ed))) fail('วันที่ไม่ถูกต้อง');
+    if (ed && ed < od) fail('วันนัดรับต้องไม่ก่อนวันที่สั่ง');
+    if (!(p.lines || []).length) fail('กรุณาเพิ่มรายการสินค้าอย่างน้อย 1 รายการ');
+    const pid = num(p, 'id'); let po;
+    if (pid == null) po = ins('purchase_orders', { doc_no: nextNo('PO'), supplier_id: sup, site_id: sid, order_date: od, expected_date: ed ?? null, status: 'draft', note: txt(p, 'note'),
+      over_budget: false, created_by: u.id, created_at: nowIso(), approved_by: null, approved_at: null, closed_by: null, closed_at: null, close_note: null });
+    else { po = byId('purchase_orders', pid); if (!po || !['draft', 'pending'].includes(po.status)) fail('แก้ไขได้เฉพาะใบสั่งซื้อที่ยังไม่อนุมัติ');
+      if (u.role === 'warehouse') needSite(u, po.site_id);
+      Object.assign(po, { supplier_id: sup, site_id: sid, order_date: od, expected_date: ed ?? null, note: txt(p, 'note') }); db.po_lines = db.po_lines.filter((x) => x.po_id !== po.id); }
+    p.lines.forEach((ln, idx) => { const i = idx + 1; const kg = num(ln, 'est_kg'); const pr = num(ln, 'price'); const v = num(ln, 'variety_id'); const z = num(ln, 'size_id') ?? null;
+      if (v == null) fail(`รายการที่ ${i}: กรุณาเลือกสายพันธุ์`);
+      if (kg == null || kg <= 0) fail(`รายการที่ ${i}: กรุณาระบุจำนวนที่สั่ง (กก.)`);
+      if (pr == null || pr < 0) fail(`รายการที่ ${i}: กรุณาระบุราคาซื้อต่อ กก.`);
+      if (db.po_lines.some((x) => x.po_id === po.id && x.variety_id === v && x.size_id === z)) fail(`รายการที่ ${i}: สายพันธุ์/ไซส์ซ้ำกับรายการก่อนหน้า`);
+      ins('po_lines', { po_id: po.id, line_no: i, variety_id: v, size_id: z, est_kg: R2(kg), price: R2(pr), note: txt(ln, 'note') }); });
+    if (bool(p, 'submit', false)) po.status = 'pending';
+    audit(u.id, pid == null ? 'create' : 'update', 'po', po.id, null);
+    return poJson(po.id);
+  };
+  A.api_po_approve = (p) => {
+    const u = cur(); const po = byId('purchase_orders', num(p, 'id'));
+    if (!po || !['draft', 'pending'].includes(po.status)) fail('อนุมัติได้เฉพาะใบสั่งซื้อที่ยังไม่อนุมัติ');
+    if (!isApprover(u, po.site_id)) fail('ต้องเป็นผู้จัดการคลัง ผู้บริหาร หรือ Admin จึงอนุมัติใบสั่งซื้อได้');
+    const bm = budgetMonth(poMonth(po));
+    Object.assign(po, { status: 'approved', approved_by: u.id, approved_at: nowIso(), over_budget: bm.budget != null && bm.total + poValue(po.id) > bm.budget });
+    audit(u.id, 'approve', 'po', po.id, p);
+    return poJson(po.id);
+  };
+  A.api_po_cancel = (p) => {
+    const u = cur(); need(u, ['warehouse', 'executive']); const po = byId('purchase_orders', num(p, 'id'));
+    if (!po || ['closed', 'cancelled'].includes(po.status)) fail('ใบสั่งซื้อนี้ปิดหรือยกเลิกไปแล้ว');
+    if (['partial', 'received'].includes(po.status) || db.receipts.some((r) => r.po_id === po.id && r.status !== 'cancelled')) fail('ใบสั่งซื้อนี้มีใบรับเข้าแล้ว — ให้ใช้ "ปิดใบสั่งซื้อ" แทน');
+    if (po.status === 'approved' && !isApprover(u, po.site_id)) fail('ใบที่อนุมัติแล้ว ต้องให้ผู้จัดการ/ผู้บริหารยกเลิก');
+    if (u.role === 'warehouse') needSite(u, po.site_id);
+    if (!txt(p, 'reason')) fail('กรุณาระบุเหตุผลการยกเลิก');
+    Object.assign(po, { status: 'cancelled', close_note: txt(p, 'reason'), closed_by: u.id, closed_at: nowIso() });
+    audit(u.id, 'cancel', 'po', po.id, p);
+    return poJson(po.id);
+  };
+  A.api_po_close = (p) => {
+    const u = cur(); const po = byId('purchase_orders', num(p, 'id'));
+    if (!po || !['approved', 'partial', 'received'].includes(po.status)) fail('ปิดได้เฉพาะใบสั่งซื้อที่อนุมัติแล้ว');
+    if (!isApprover(u, po.site_id)) fail('ต้องเป็นผู้จัดการคลัง ผู้บริหาร หรือ Admin');
+    if (db.receipts.some((r) => r.po_id === po.id && ['draft', 'pending_check'].includes(r.status))) fail('ยังมีใบรับเข้าที่อ้างอิงใบนี้รอตรวจรับ — ยืนยันหรือยกเลิกก่อน');
+    Object.assign(po, { status: 'closed', close_note: txt(p, 'note'), closed_by: u.id, closed_at: nowIso() });
+    audit(u.id, 'close', 'po', po.id, p);
+    return poJson(po.id);
+  };
+  A.api_pos = (p) => {
+    const u = cur(); need(u, ['warehouse', 'executive']); const q = txt(p, 'q')?.toLowerCase(); const sts = txt(p, 'status')?.split(',');
+    return db.purchase_orders.filter((po) => canSee(u, po.site_id) && (!sts || sts.includes(po.status)) && (!bool(p, 'open', false) || ['approved', 'partial'].includes(po.status))
+      && (num(p, 'supplier_id') == null || po.supplier_id === num(p, 'supplier_id')) && (!txt(p, 'month') || poMonth(po) === p.month)
+      && (!q || like(po.doc_no, q) || like(byId('suppliers', po.supplier_id).name, q)))
+      .sort((a, b) => (a.order_date < b.order_date ? 1 : a.order_date > b.order_date ? -1 : b.id - a.id)).slice(off(p), off(p) + lim(p))
+      .map((po) => { const { lines, receipts, budget, ...j } = poJson(po.id); return j; });
+  };
+  A.api_po_get = (p) => { const u = cur(); need(u, ['warehouse', 'executive']); const po = byId('purchase_orders', num(p, 'id')); if (!po || !canSee(u, po.site_id)) fail('ไม่พบใบสั่งซื้อ'); return poJson(po.id); };
+  A.api_budget_save = (p) => {
+    const u = cur(); need(u, ['executive']); const m = txt(p, 'month'); const a = num(p, 'amount');
+    if (!m || !/^\d{4}-(0[1-9]|1[0-2])$/.test(m)) fail('เดือนไม่ถูกต้อง');
+    if (a == null) db.purchase_budgets = db.purchase_budgets.filter((x) => x.month !== m);
+    else { if (a < 0) fail('งบต้องไม่ติดลบ'); const ex = db.purchase_budgets.find((x) => x.month === m);
+      const row = { month: m, amount: R2(a), note: txt(p, 'note'), updated_by: u.id, updated_at: nowIso() }; if (ex) Object.assign(ex, row); else db.purchase_budgets.push(row); }
+    audit(u.id, 'update', 'budget', m, p);
+    return budgetMonth(m);
+  };
+  A.api_budget_summary = (p) => {
+    const u = cur(); need(u, ['warehouse', 'executive']); const y = int(p, 'year') ?? Number(bkkDate(Date.now()).slice(0, 4)); const m = txt(p, 'month') || bkkDate(Date.now()).slice(0, 7);
+    const by = new Map();
+    db.receipt_lines.forEach((rl) => { const r = byId('receipts', rl.receipt_id); if (r.status !== 'confirmed' || bkkDate(r.received_at).slice(0, 7) !== m) return;
+      const g = by.get(r.supplier_id) || { supplier_id: r.supplier_id, supplier: byId('suppliers', r.supplier_id).name, kg: 0, value: 0, _r: new Set() };
+      g.kg += rl.accepted_kg; g.value += rl.accepted_kg * rl.unit_cost; g._r.add(r.id); by.set(r.supplier_id, g); });
+    return { year: y, month: m, months: Array.from({ length: 12 }, (_, i) => budgetMonth(`${y}-${String(i + 1).padStart(2, '0')}`)),
+      suppliers: [...by.values()].map(({ _r, ...g }) => ({ ...g, kg: R2(g.kg), value: R2(g.value), receipts: _r.size, avg_price: g.kg > 0 ? R2(g.value / g.kg) : null })).sort((a, b) => b.value - a.value) };
+  };
+
+  // ---------- แผนจัดส่ง (ปฏิทินรายเดือน) · รุ่น 2.4 — ตรงกับ sql/08_api_plan.sql ----------
+  const PLAN_PALETTE = ['#2a78d6', '#eb6834', '#1baf7a', '#eda100', '#e87ba4', '#008300', '#4a3aa7', '#e34948'];
+  const thd = (d) => { const [y, m, dd] = d.split('-').map(Number); return `${dd}/${m}/${y + 543}`; };
+  const addDays = (iso, n) => new Date(Date.parse(iso + 'T00:00:00Z') + n * 86400e3).toISOString().slice(0, 10);
+  const isoDow = (iso) => ((new Date(iso + 'T00:00:00Z').getUTCDay() + 6) % 7) + 1;
+  const validDate = (v) => typeof v === 'string' && /^\d{4}-\d{2}-\d{2}$/.test(v) && new Date(v + 'T00:00:00Z').toISOString().slice(0, 10) === v;
+  const planNextColor = () => PLAN_PALETTE.map((c, i) => [c, i, db.plan_dests.filter((d) => d.active && d.color === c).length])
+    .sort((a, b) => a[2] - b[2] || a[1] - b[1])[0][0];
+  const dispatchDay = (d) => d.doc_date || bkkDate(d.shipped_at || d.created_at);
+  const destOf = (d) => (d.site_id != null ? site(d.site_id) : byId('customers', d.customer_id)) || null;
+  const planDestJson = (d) => {
+    const o = destOf(d); const c = d.customer_id != null ? o : null;
+    const last = db.delivery_plans.filter((x) => x.dest_id === d.id && x.planned_kg != null).sort((a, b) => b.plan_date.localeCompare(a.plan_date) || b.id - a.id)[0];
+    return { id: d.id, kind: d.site_id != null ? 'site' : 'customer', site_id: d.site_id, customer_id: d.customer_id, code: o?.code ?? null, name: o?.name ?? null,
+      channel: c?.channel ?? null, color: d.color, sort: d.sort, active: !!d.active && (o ? !!o.active : true),
+      last_kg: last ? last.planned_kg : null, last_baskets: last ? (last.planned_baskets ?? null) : null };
+  };
+  const planSeed = () => {
+    db.sites.filter((s) => s.kind === 'branch' && s.active && !db.plan_dests.some((d) => d.site_id === s.id))
+      .sort((a, b) => (a.sort ?? 0) - (b.sort ?? 0) || String(a.name).localeCompare(String(b.name)) || a.id - b.id)
+      .forEach((s) => ins('plan_dests', { site_id: s.id, customer_id: null, color: planNextColor(), sort: s.sort ?? 0, active: true, created_by: null, created_at: nowIso() }));
+  };
+  const planJson = (x) => ({ id: x.id, plan_date: x.plan_date, dest_id: x.dest_id, planned_kg: x.planned_kg, planned_baskets: x.planned_baskets, note: x.note });
+  const PLANNERS = ['warehouse', 'executive'];
+
+  A.api_plan_month = (p) => {
+    const u = cur(); const t = today(); const m = txt(p, 'month') || t.slice(0, 7);
+    if (!/^\d{4}-(0[1-9]|1[0-2])$/.test(m)) fail('เดือนไม่ถูกต้อง');
+    const br = u.role === 'branch'; const ed = ['admin', 'warehouse', 'executive'].includes(u.role);
+    const m0 = m + '-01'; const [yy, mm] = m.split('-').map(Number);
+    const m1 = addDays(`${mm === 12 ? yy + 1 : yy}-${String(mm === 12 ? 1 : mm + 1).padStart(2, '0')}-01`, -1);
+    const g0 = addDays(m0, -(isoDow(m0) - 1)); const g1 = addDays(m1, 7 - isoDow(m1));
+    if (ed) planSeed();
+    const dests = db.plan_dests.filter((d) => !br || d.site_id === u.site_id)
+      .sort((a, b) => a.sort - b.sort || String(destOf(a)?.name ?? '').localeCompare(String(destOf(b)?.name ?? '')) || a.id - b.id).map(planDestJson);
+    const vis = (destId) => { const d = byId('plan_dests', destId); return !br || d.site_id === u.site_id; };
+    const plans = db.delivery_plans.filter((x) => x.plan_date >= g0 && x.plan_date <= g1 && vis(x.dest_id))
+      .sort((a, b) => a.plan_date.localeCompare(b.plan_date) || a.dest_id - b.dest_id)
+      .map((x) => ({ ...planJson(x), updated_by_name: uname(x.updated_by ?? x.created_by), updated_at: x.updated_at }));
+    const docs = [];
+    for (const d of db.dispatches) {
+      if (d.status === 'cancelled') continue;
+      const day = dispatchDay(d); if (day < g0 || day > g1) continue;
+      if (br && !(d.kind === 'transfer' && d.to_site_id === u.site_id)) continue;
+      const pd = db.plan_dests.find((x) => (d.kind === 'transfer' && x.site_id === d.to_site_id) || (d.kind === 'sale' && x.customer_id != null && x.customer_id === d.customer_id));
+      if (!pd) continue;
+      const ls = db.dispatch_lines.filter((l) => l.dispatch_id === d.id);
+      const rk = ls.filter((l) => l.received_kg != null); const rb = ls.filter((l) => l.received_baskets != null);
+      docs.push({ id: d.id, doc_no: d.doc_no, date: day, dest_id: pd.id, kind: d.kind, status: d.status,
+        kg: R2(ls.reduce((a, l) => a + l.kg, 0)), baskets: ls.reduce((a, l) => a + (l.baskets || 0), 0),
+        received_kg: rk.length ? R2(rk.reduce((a, l) => a + l.received_kg, 0)) : null, received_baskets: rb.length ? rb.reduce((a, l) => a + l.received_baskets, 0) : null,
+        shipped_at: d.shipped_at ?? null, received_at: d.received_at ?? null, open_cases: db.cases.filter((c) => c.dispatch_id === d.id && c.status === 'open').length });
+    }
+    docs.sort((a, b) => a.date.localeCompare(b.date) || a.id - b.id);
+    return { month: m, month_start: m0, month_end: m1, from: g0, to: g1, today: t, can_edit: ed,
+      receive_deadline_hours: threshold('receive_deadline_hours', 4), dests, plans, docs };
+  };
+
+  A.api_plan_save = (p) => {
+    const u = cur(); need(u, PLANNERS);
+    const id = int(p, 'id'); const destId = int(p, 'dest_id');
+    if (p.plan_date != null && !validDate(p.plan_date)) fail('วันที่ไม่ถูกต้อง');
+    const date = p.plan_date ?? null; if (date == null) fail('กรุณาเลือกวันที่ส่ง');
+    const d = byId('plan_dests', destId); if (!d) fail('กรุณาเลือกปลายทาง');
+    const nm = destOf(d)?.name ?? null;
+    const kg = num(p, 'planned_kg'); const bk = int(p, 'planned_baskets');
+    if (kg != null && kg <= 0) fail('น้ำหนักตามแผนต้องมากกว่า 0 กก. (หรือเว้นว่างไว้)');
+    if (kg > 100000) fail('น้ำหนักตามแผนมากเกินไป');
+    if (bk != null && bk < 0) fail('จำนวนตะกร้าต้องไม่ติดลบ');
+    let x = null;
+    if (id != null) { x = byId('delivery_plans', id); if (!x) fail('ไม่พบแผนส่งนี้ (อาจถูกลบไปแล้ว)'); }
+    const act = !!d.active && (destOf(d) ? !!destOf(d).active : true);
+    if (!act && (id == null || x.dest_id !== destId)) fail('ปลายทาง ' + nm + ' ถูกนำออกจากแผนหรือปิดใช้งานแล้ว');
+    if (db.delivery_plans.some((r) => r.plan_date === date && r.dest_id === destId && r.id !== id)) fail(`มีแผนส่ง ${nm} วันที่ ${thd(date)} อยู่แล้ว — แก้ไขรายการเดิมแทน`);
+    const vals = { plan_date: date, dest_id: destId, planned_kg: kg == null ? null : R2(kg), planned_baskets: bk, note: txt(p, 'note'), updated_by: u.id, updated_at: nowIso() };
+    if (id == null) x = ins('delivery_plans', { ...vals, created_by: u.id, created_at: nowIso() }); else Object.assign(x, vals);
+    audit(u.id, id == null ? 'create' : 'update', 'delivery_plan', x.id, { date: x.plan_date, dest: nm, kg: x.planned_kg, baskets: x.planned_baskets });
+    return planJson(x);
+  };
+
+  A.api_plan_delete = (p) => {
+    const u = cur(); need(u, PLANNERS);
+    const x = byId('delivery_plans', int(p, 'id')); if (!x) fail('ไม่พบแผนส่งนี้ (อาจถูกลบไปแล้ว)');
+    db.delivery_plans = db.delivery_plans.filter((r) => r.id !== x.id);
+    audit(u.id, 'delete', 'delivery_plan', x.id, { date: x.plan_date, dest: destOf(byId('plan_dests', x.dest_id))?.name ?? null, kg: x.planned_kg, baskets: x.planned_baskets });
+    return { ok: true };
+  };
+
+  A.api_plan_dest_save = (p) => {
+    const u = cur(); need(u, PLANNERS);
+    const id = int(p, 'id'); const sid = int(p, 'site_id'); const cid = int(p, 'customer_id'); const color = txt(p, 'color')?.toLowerCase() ?? null;
+    if (color != null && !/^#[0-9a-f]{6}$/.test(color)) fail('รหัสสีไม่ถูกต้อง (เช่น #2a78d6)');
+    let d; let act;
+    if (id != null) {
+      d = byId('plan_dests', id); if (!d) fail('ไม่พบปลายทางนี้');
+      if (color) d.color = color; const so = int(p, 'sort'); if (so != null) d.sort = so; act = 'update';
+    } else {
+      if ((sid == null) === (cid == null)) fail('กรุณาเลือกสาขาหรือลูกค้า 1 รายการ');
+      if (sid != null && !db.sites.some((s) => s.id === sid && s.kind === 'branch' && s.active)) fail('เลือกได้เฉพาะสาขาที่ยังเปิดใช้งาน');
+      if (cid != null && !db.customers.some((c) => c.id === cid && c.active)) fail('ไม่พบลูกค้านี้ หรือถูกปิดใช้งานแล้ว');
+      d = db.plan_dests.find((x) => (sid != null && x.site_id === sid) || (cid != null && x.customer_id === cid));
+      if (d) { if (d.active) fail('ปลายทางนี้อยู่ในแผนแล้ว'); d.active = true; if (color) d.color = color; act = 'restore'; }
+      else { d = ins('plan_dests', { site_id: sid, customer_id: cid, color: color || planNextColor(), sort: sid != null ? (site(sid).sort ?? 0) : 1000, active: true, created_by: u.id, created_at: nowIso() }); act = 'create'; }
+    }
+    audit(u.id, act, 'plan_dest', d.id, { site_id: d.site_id, customer_id: d.customer_id, color: d.color });
+    return planDestJson(d);
+  };
+
+  A.api_plan_dest_remove = (p) => {
+    const u = cur(); need(u, PLANNERS);
+    const d = byId('plan_dests', int(p, 'id')); if (!d) fail('ไม่พบปลายทางนี้');
+    const n = db.delivery_plans.filter((x) => x.dest_id === d.id && x.plan_date >= today()).length;
+    if (n > 0) fail(`ยังมีแผนส่ง ${n} รายการตั้งแต่วันนี้ไป — ลบหรือย้ายแผนก่อน`);
+    d.active = false;
+    audit(u.id, 'remove', 'plan_dest', d.id, { site_id: d.site_id, customer_id: d.customer_id });
+    return { ok: true };
+  };
+
   // ---------- เริ่มต้นข้อมูล ----------
   function install() {
     db = empty();
     db.settings = {
       thresholds: { value: { low_stock_kg: 200, near_ripe_days: 5, aging_days: 7, weight_variance_pct: 5, std_basket_kg: 20, receive_deadline_hours: 4, task_due_hours: 24, receipt_check_hours: 4, bill_due_hours: 48, shrink_auto_pct: 3, basket_tare_kg: 1.5 } },
-      options: { value: { require_receive_photo: true, require_waste_photo: true, max_sales_discount_pct: 5 } },
+      options: { value: { require_receive_photo: true, require_waste_photo: true, max_sales_discount_pct: 5, allow_negative_dispatch: true } },
       company: { value: { name: '', address: '', tax_id: '', phone: '', branch: 'สำนักงานใหญ่' } },
-      line: { value: { enabled: false, repeat_hours: 20, app_url: '', kinds: ['overripe', 'ripe', 'near_ripe', 'aging', 'late', 'case', 'overdue', 'pending_adjust', 'pending_return', 'credit_needed', 'pending_stocktake', 'pending_receipt', 'low_stock'] } },
+      line: { value: { enabled: false, repeat_hours: 20, app_url: '', kinds: ['negative_stock', 'overripe', 'ripe', 'near_ripe', 'aging', 'late', 'case', 'overdue', 'pending_adjust', 'pending_return', 'credit_needed', 'pending_stocktake', 'pending_receipt', 'low_stock'] } },
     };
     ins('sites', { code: 'CW', name: 'คลังกลาง', kind: 'warehouse', active: true, sort: 1, updated_by: null, updated_at: nowIso() });
     [['HASS', 'Hass', 1], ['BUCC', 'บัคคาเนีย', 2], ['BOOTH7', 'Booth 7', 3], ['PETER', 'ปีเตอร์สัน', 4]].forEach(([code, name, sort]) => ins('varieties', { code, name, active: true, sort, updated_by: null, updated_at: nowIso() }));
@@ -1534,6 +1987,7 @@ export function createDemoBackend(storageKey = 'avoflow-demo-v1') {
     async rpc(fn, p = {}) {
       if (!A[fn]) throw new ApiError('ไม่พบฟังก์ชัน ' + fn);
       const snapshot = JSON.stringify(db);
+      G.allowNeg = false; G.noNet = false;
       try {
         const out = A[fn](JSON.parse(JSON.stringify(p || {})));
         save();

@@ -6,6 +6,7 @@ const state = { q: '', f: {}, showFilter: false, sort: 'rip', rstatus: '', dstat
 
 export async function render(el, ctx, params) {
   const tab = TABS.find((t) => t[0] === params[0]) ? params[0] : 'stock';
+  if (tab === 'stock' && params[1] === 'neg') { state.f.neg = true; state.f.site_id = 'all'; }   // มาจากแจ้งเตือน "ยอด Lot ติดลบ"
   onChange(ctx, () => ctx.page === 'warehouse' && render(el, ctx, params));
   el.innerHTML = `<div class="page-head"><div><h1>คลังสินค้า</h1><div class="sub">รับเข้า · คงคลัง · ตีออก · ประวัติการเคลื่อนไหว</div></div>
     <div class="actions"><button class="btn" id="chk">ตรวจสอบ Lot</button>${ctx.can.dispatch ? '<button class="btn" id="new-d">ตีออก / โอน</button>' : ''}${ctx.can.receive ? '<button class="btn primary" id="new-r">+ รับเข้าสินค้า</button>' : ''}</div></div>
@@ -29,10 +30,14 @@ async function stockTab(el, ctx) {
   const [dash, rows] = await Promise.all([ctx.api.rpc('api_dashboard', {}), ctx.api.rpc('api_stock', {})]);
   const whLots = new Set(rows.filter((r) => r.site_kind === 'warehouse').map((r) => r.lot_id)).size;
   const last = rows.reduce((a, r) => (r.updated_at > a ? r.updated_at : a), '');
+  const negRows = rows.filter((r) => Number(r.kg) < 0); const negLots = new Set(negRows.map((r) => `${r.site_id}|${r.zone}|${r.lot_id}`)).size;
+  if (!negRows.length) state.f.neg = false;
   el.innerHTML = `<div class="kpis k3">
       <div class="card kpi"><div class="label">พร้อมจ่ายในคลัง</div><div class="value num">${fmtN(dash.ready_kg)} กก.</div></div>
       <div class="card kpi"><div class="label">จองเพื่อส่ง</div><div class="value num">${fmtN(dash.reserved_kg)} กก.</div></div>
       <div class="card kpi"><div class="label">Lot ทั้งหมด</div><div class="value num">${whLots} Lot</div></div></div>
+    ${negRows.length ? `<div class="notice danger" id="neg-bar">มี <b>${negLots}</b> Lot ที่ยอดติดลบ รวม <b>${fmtN(-negRows.reduce((a, r) => a + Number(r.kg), 0))}</b> กก. (ตีออกเกินยอดที่บันทึกไว้) · เคลียร์โดยกด "ปรับยอด" ตามที่นับได้จริง หรือแก้ใบตีออกให้ตัดจาก Lot ที่ถูกต้อง
+      <button class="link" id="neg-only" type="button">${state.f.neg ? 'แสดงสต็อกทั้งหมด' : 'แสดงเฉพาะยอดติดลบ'}</button></div>` : ''}
     <div class="card"><div class="card-head"><div><div class="card-title">สต็อกคงคลัง</div><div class="card-sub">เลือก Lot เพื่อตรวจย้อนกลับถึงสวนและเอกสาร</div></div><span class="small muted">อัปเดตล่าสุด ${last ? thTime(last) : '—'}</span></div>
       <div class="toolbar"><input class="input grow" id="q" placeholder="ค้นหาสายพันธุ์, Lot หรือสวน" value="${esc(state.q)}">
         <select class="input" id="sort" style="width:auto"><option value="rip">เรียง: สุกก่อน</option><option value="date">เรียง: รับเข้าก่อน</option><option value="kg">เรียง: คงเหลือมาก</option><option value="lot">เรียง: เลข Lot</option></select>
@@ -51,7 +56,7 @@ async function stockTab(el, ctx) {
     const q = state.q.toLowerCase(); const f = state.f;
     let r = rows.filter((x) => (f.site_id === 'all' ? true : f.site_id ? x.site_id === Number(f.site_id) : x.site_kind === 'warehouse')
       && (!f.zone || x.zone === f.zone) && (!f.variety_id || x.variety_id === Number(f.variety_id)) && (!f.size_id || x.size_id === Number(f.size_id)) && (!f.ripeness || x.ripeness === f.ripeness)
-      && (!f.supplier_id || x.supplier_id === Number(f.supplier_id))
+      && (!f.supplier_id || x.supplier_id === Number(f.supplier_id)) && (!f.neg || Number(x.kg) < 0)
       && (!q || [x.lot_code, x.variety, x.supplier, x.size].some((s) => (s || '').toLowerCase().includes(q))));
     const cmp = { rip: (a, b) => b.rip_rank - a.rip_rank || (a.received_at < b.received_at ? -1 : 1), date: (a, b) => (a.received_at < b.received_at ? -1 : 1), kg: (a, b) => b.kg - a.kg, lot: (a, b) => a.lot_code.localeCompare(b.lot_code) }[state.sort];
     return r.sort(cmp);
@@ -63,8 +68,10 @@ async function stockTab(el, ctx) {
     { label: 'สวน', render: (r) => esc(r.supplier || '-') },
     { label: 'รับเข้า', render: (r) => `${thDate(r.received_at)}<div class="small muted">${r.age_days} วัน</div>` },
     { label: 'ที่เก็บ', render: (r) => `${esc(r.site)} · ${ZONE[r.zone]}` },
-    { label: 'คงเหลือ', right: true, render: (r) => `<b>${fmtN(r.kg)} กก.</b><div class="small muted">${r.bags ? fmtN(r.bags) + ' ถุง' : fmtN(r.baskets) + ' ตะกร้า'}${r.est_pieces ? ' · ≈' + fmtN(r.est_pieces) + ' ลูก' : ''}${Number(r.reserved_kg) ? ' · จอง ' + fmtN(r.reserved_kg) : ''}</div>` },
-    { label: '', render: (r) => (ctx.can.actAt(r.site_id) && r.product === 'fresh' ? `<span class="actions" style="justify-content:flex-end;flex-wrap:nowrap"><button class="btn sm" data-rip="${r.lot_id}|${r.ripeness}|${r.site_id}|${r.zone}">ตรวจความสุก</button><button class="btn sm" data-rw="${r.lot_id}|${r.ripeness}|${r.site_id}|${r.zone}">ชั่งซ้ำ</button></span>` : '') },
+    { label: 'คงเหลือ', right: true, render: (r) => (Number(r.kg) < 0 ? `<b class="bad">${fmtN(r.kg)} กก.</b><div class="small bad">ติดลบ · รอเคลียร์</div>`
+      : `<b>${fmtN(r.kg)} กก.</b><div class="small muted">${r.bags ? fmtN(r.bags) + ' ถุง' : fmtN(r.baskets) + ' ตะกร้า'}${r.est_pieces ? ' · ≈' + fmtN(r.est_pieces) + ' ลูก' : ''}${Number(r.reserved_kg) ? ' · จอง ' + fmtN(r.reserved_kg) : ''}</div>`) },
+    { label: '', render: (r) => (!ctx.can.actAt(r.site_id) ? '' : Number(r.kg) < 0 ? `<span class="actions" style="justify-content:flex-end"><button class="btn sm" data-adj="${r.lot_id}|${r.ripeness}|${r.site_id}|${r.zone}|${-Number(r.kg)}">ปรับยอด</button></span>`
+      : r.product === 'fresh' ? `<span class="actions" style="justify-content:flex-end;flex-wrap:nowrap"><button class="btn sm" data-rip="${r.lot_id}|${r.ripeness}|${r.site_id}|${r.zone}">ตรวจความสุก</button><button class="btn sm" data-rw="${r.lot_id}|${r.ripeness}|${r.site_id}|${r.zone}">ชั่งซ้ำ</button></span>` : '') },
   ];
   const draw = () => {
     const r = filt();
@@ -73,7 +80,10 @@ async function stockTab(el, ctx) {
     $$('[data-lot]', el).forEach((tr) => (tr.onclick = (e) => { if (e.target.closest('button')) return; lotTrace(ctx, Number(tr.dataset.lot)); }));
     $$('[data-rip]', el).forEach((b) => (b.onclick = () => { const [lot_id, ripeness, site_id, zone] = b.dataset.rip.split('|'); ripenessModal(ctx, { site_id: Number(site_id), zone, preset: { lot_id, ripeness } }); }));
     $$('[data-rw]', el).forEach((b) => (b.onclick = () => { const [lot_id, ripeness, site_id, zone] = b.dataset.rw.split('|'); reweighModal(ctx, { site_id: Number(site_id), zone, preset: { lot_id, ripeness } }); }));
+    $$('[data-adj]', el).forEach((b) => (b.onclick = () => { const [lot_id, ripeness, site_id, zone, kg] = b.dataset.adj.split('|');
+      adjustModal(ctx, Number(site_id), 'count_adjust', { zone, lot_id, ripeness, kg: Number(kg), reason: 'เคลียร์ยอดติดลบ: ' }); }));
   };
+  const nb = $('#neg-only', el); if (nb) nb.onclick = () => { state.f.neg = !state.f.neg; if (state.f.neg) state.f.site_id = 'all'; stockTab(el, ctx); };
   $('#q', el).oninput = (e) => { state.q = e.target.value; draw(); };
   $('#sort', el).onchange = (e) => { state.sort = e.target.value; draw(); };
   $('#ft', el).onclick = () => { state.showFilter = !state.showFilter; $('#fl', el).classList.toggle('hidden'); };

@@ -40,6 +40,7 @@ export const STATUS = {
   quote: { draft: ['ฉบับร่าง', 'b-gray'], sent: ['ส่งลูกค้าแล้ว', 'b-info'], accepted: ['ลูกค้าตกลง', 'b-ok'], cancelled: ['ยกเลิก', 'b-gray'] },
   return: { pending: ['รออนุมัติ', 'b-warn'], applied: ['อนุมัติแล้ว', 'b-ok'], rejected: ['ไม่อนุมัติ', 'b-gray'], cancelled: ['ยกเลิก', 'b-gray'] },
   credit: { issued: ['ออกแล้ว', 'b-ok'], cancelled: ['ยกเลิก', 'b-gray'] },
+  po: { draft: ['ร่าง', 'b-gray'], pending: ['รออนุมัติ', 'b-warn'], approved: ['อนุมัติแล้ว · รอรับ', 'b-info'], partial: ['รับบางส่วน', 'b-warn'], received: ['รับครบ', 'b-ok'], closed: ['ปิดแล้ว', 'b-ok'], cancelled: ['ยกเลิก', 'b-gray'] },
   stocktake: { draft: ['กำลังนับ', 'b-info'], submitted: ['รออนุมัติ', 'b-warn'], approved: ['อนุมัติ · ปรับยอดแล้ว', 'b-ok'], rejected: ['ไม่อนุมัติ', 'b-gray'], cancelled: ['ยกเลิก', 'b-gray'] },
 };
 export const DOC_TYPE = { invoice: ['ใบส่งของ / ใบแจ้งหนี้', 'INV'], tax_invoice: ['ใบกำกับภาษีเต็มรูป', 'TIV'], cash: ['บิลเงินสด', 'CS'] };
@@ -229,6 +230,7 @@ export const PAGE = 100;
 export const moreBtn = (len, size = PAGE) => (len > 0 && len % size === 0 ? `<div class="actions" style="justify-content:center;margin-top:10px"><button class="btn sm" data-more>แสดงเพิ่ม</button></div>` : '');
 
 export const ICONS = {
+  cal: '<svg viewBox="0 0 24 24" fill="none" stroke-width="1.7"><rect x="3.5" y="5" width="17" height="15.5" rx="2"/><path d="M3.5 10h17M8 3v4M16 3v4"/><path d="M8 14h2M12 14h2M16 14h.5M8 17.5h2M12 17.5h2"/></svg>',
   dash: '<svg viewBox="0 0 24 24" fill="none" stroke-width="1.7"><rect x="3" y="3" width="7" height="7" rx="1.5"/><rect x="14" y="3" width="7" height="7" rx="1.5"/><rect x="3" y="14" width="7" height="7" rx="1.5"/><rect x="14" y="14" width="7" height="7" rx="1.5"/></svg>',
   stock: '<svg viewBox="0 0 24 24" fill="none" stroke-width="1.7"><circle cx="8" cy="15" r="4"/><circle cx="16" cy="15" r="4"/><circle cx="12" cy="8" r="4"/></svg>',
   store: '<svg viewBox="0 0 24 24" fill="none" stroke-width="1.7"><path d="M4 10v9h16v-9"/><path d="M3 10l2-6h14l2 6"/><path d="M3 10c0 1.7 1.3 3 3 3s3-1.3 3-3c0 1.7 1.3 3 3 3s3-1.3 3-3c0 1.7 1.3 3 3 3s3-1.3 3-3"/><path d="M10 19v-4h4v4"/></svg>',

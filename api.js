@@ -17,6 +17,7 @@ function cleanMessage(e) {
   if (/Invalid email or password|INVALID_EMAIL_OR_PASSWORD|Invalid login credentials/i.test(m)) return 'อีเมลหรือรหัสผ่านไม่ถูกต้อง';
   if (/User already exists|USER_ALREADY_EXISTS|already registered/i.test(m)) return 'อีเมลนี้สมัครไว้แล้ว ใช้ "เข้าสู่ระบบ" หรือ "ลืมรหัสผ่าน"';
   if (/INVALID_TOKEN|invalid token|expired/i.test(m)) return 'ลิงก์ตั้งรหัสผ่านหมดอายุหรือไม่ถูกต้อง กรุณาขอลิงก์ใหม่';
+  if (/deadlock detected|lock timeout|statement timeout|could not obtain lock/i.test(m)) return 'ระบบกำลังบันทึกรายการอื่นของ Lot เดียวกันอยู่ กรุณากดบันทึกอีกครั้ง';
   if (/Could not find the function|PGRST202|schema cache/i.test(m)) return 'ระบบยังไม่รู้จักฟังก์ชันใหม่ — ผู้ดูแลต้องกด Refresh schema cache ในหน้า Data API ของ Neon';
   return m;
 }
@@ -27,7 +28,7 @@ function cleanMessage(e) {
 async function demoApi() {
   const { createDemoBackend } = await import('./demo-backend.js');
   const { seedDemo, DEMO_USERS } = await import('./seed.js');
-  const be = createDemoBackend('avoflow-demo-v3');
+  const be = createDemoBackend('avoflow-demo-v4');
   const ensureData = async () => {
     if (be.load()) return;
     be.reset();

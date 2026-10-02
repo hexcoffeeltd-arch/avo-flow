@@ -10,6 +10,7 @@ const PAGES = {
   dashboard: { title: 'แดชบอร์ด', load: () => import('./dashboard.js') },
   tasks: { title: 'คิวงานส่งต่อ', load: () => import('./tasks.js') },
   warehouse: { title: 'คลังสินค้า', load: () => import('./warehouse.js') },
+  plan: { title: 'แผนจัดส่ง', load: () => import('./plan.js') },
   branches: { title: 'สาขาและส่งต่องาน', load: () => import('./branches.js') },
   sales: { title: 'การขายและบิล', load: () => import('./sales.js') },
   suppliers: { title: 'จัดซื้อ / สวน', load: () => import('./suppliers.js') },
@@ -33,6 +34,7 @@ function buildCan(u) {
     sales: is('sales', 'executive'), invoices: is('sales', 'executive', 'warehouse'), prices: is('executive'),
     settings: r === 'admin', master: r === 'admin' || (r === 'warehouse' && u.is_manager),
     suppliers: is('warehouse', 'executive'), customers: is('sales', 'executive'), addCustomer: is('sales', 'executive', 'warehouse'),
+    purchase: is('warehouse', 'executive'), budget: is('executive'), plan: is('warehouse', 'executive'),
     seeWarehouse: r !== 'branch', recordDelivery: is('warehouse', 'sales'),
     returns: is('sales', 'warehouse', 'branch', 'executive'), credit: is('sales', 'executive'), stocktake: is('warehouse', 'branch'),
   };
@@ -128,6 +130,7 @@ const NAV = [
   { key: 'tasks', icon: 'tasks', label: 'คิวงานส่งต่อ', sub: 'งานอยู่ที่ใคร · ขาดอะไร · กำหนดเสร็จ', badge: 'nav-tasks' },
   { group: 'ปฏิบัติงาน' },
   { key: 'warehouse', icon: 'stock', label: 'คลังสินค้า', sub: 'รับเข้า · คงคลัง · ตีออก · ตรวจนับ', show: (c) => c.seeWarehouse },
+  { key: 'plan', icon: 'cal', label: 'แผนจัดส่ง', sub: 'ปฏิทินส่งของ · สรุปรายสาขา' },
   { key: 'branches', icon: 'store', label: 'สาขาและส่งต่องาน', sub: 'หน้าร้าน · หลังร้าน · แช่แข็ง' },
   { key: 'sales', icon: 'bill', label: 'การขายและบิล', sub: 'บิล · รับคืน · ลดหนี้ · ลูกค้า', show: (c) => c.invoices },
   { group: 'ข้อมูลและระบบ' },
@@ -222,12 +225,15 @@ async function route() {
   const navKey = key === 'alerts' ? null : key;
   $$('.nav a').forEach((a) => a.classList.toggle('active', a.dataset.nav === navKey));
   $('#crumb').innerHTML = `${esc(CONFIG.appName)} / <b>${esc(PAGES[key].title)}</b>`;
-  const el = $('#content'); el.innerHTML = '<div class="spinner"></div>';
+  // หน้าใหม่ได้กล่องใหม่ทุกครั้ง: หน้าเก่าที่ยังโหลดไม่เสร็จจะเขียนลงกล่องเดิมที่ถูกถอดออกแล้ว ไม่ทับหน้าปัจจุบัน
+  const el = document.createElement('div'); el.innerHTML = '<div class="spinner"></div>'; $('#content').replaceChildren(el);
+  const nav = (ctx._nav = (ctx._nav || 0) + 1);
   ctx.page = key; ctx.params = parts.slice(1);
   try {
     const mod = await PAGES[key].load();
-    if (ctx.page !== key) return;
+    if (ctx._nav !== nav) return;
     await mod.render(el, ctx, parts.slice(1));
+    if (ctx._nav !== nav) return;
   } catch (e) {
     if (!(e instanceof AppError)) console.error(e);
     el.innerHTML = `<div class="notice">${esc(e.message || e)}</div>`;

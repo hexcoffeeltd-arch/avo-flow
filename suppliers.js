@@ -1,12 +1,24 @@
 import { $, $$, esc, fmtN, fmtMoney, thDate, statusBadge, table, openModal } from './ui.js';
 import { supplierForm, receiptView, receiptForm, onChange } from './docs.js';
+import { poList, poForm, budgetPage } from './purchase.js';
 
-export async function render(el, ctx) {
-  onChange(ctx, () => ctx.page === 'suppliers' && render(el, ctx));
+const TABS = [['farms', 'สวน'], ['po', 'ใบสั่งซื้อ'], ['budget', 'งบ / ยอดซื้อ']];
+
+export async function render(el, ctx, params = []) {
+  const tabs = TABS.filter(([k]) => k === 'farms' || ctx.can.purchase);
+  const tab = tabs.find((t) => t[0] === params[0]) ? params[0] : 'farms';
+  onChange(ctx, () => ctx.page === 'suppliers' && render(el, ctx, params));
+  el.innerHTML = `<div class="page-head"><div><h1>จัดซื้อ / สวน</h1><div class="sub">ข้อมูลสวน · ใบสั่งซื้อ · งบจัดซื้อและยอดซื้อรายเดือนสำหรับบัญชี</div></div>
+    <div class="actions">${ctx.can.receive ? '<button class="btn" id="rc">+ รับเข้าสินค้า</button>' : ''}${ctx.can.purchase ? '<button class="btn" id="po">+ ใบสั่งซื้อ</button>' : ''}${ctx.can.suppliers ? '<button class="btn primary" id="add">+ เพิ่มสวน</button>' : ''}</div></div>
+    ${tabs.length > 1 ? `<div class="tabs">${tabs.map(([k, v]) => `<a class="tab ${k === tab ? 'active' : ''}" href="#/suppliers/${k}">${v}</a>`).join('')}</div>` : ''}<div id="tab"><div class="spinner"></div></div>`;
+  const a = $('#add', el); if (a) a.onclick = () => supplierForm(ctx);
+  const r = $('#rc', el); if (r) r.onclick = () => receiptForm(ctx);
+  const p = $('#po', el); if (p) p.onclick = () => poForm(ctx);
+  const body = $('#tab', el);
+  if (tab === 'po') return poList(body, ctx);
+  if (tab === 'budget') return budgetPage(body, ctx);
   const rows = await ctx.api.rpc('api_suppliers', {});
-  el.innerHTML = `<div class="page-head"><div><h1>จัดซื้อ / สวน</h1><div class="sub">ข้อมูลสวน ผู้ติดต่อ ราคาซื้อ และประวัติรับเข้า · ใช้เลือกจากข้อมูลกลางเมื่อรับสินค้า</div></div>
-    <div class="actions">${ctx.can.receive ? '<button class="btn" id="rc">+ รับเข้าสินค้า</button>' : ''}${ctx.can.suppliers ? '<button class="btn primary" id="add">+ เพิ่มสวน</button>' : ''}</div></div>
-    <div class="card">${table([
+  body.innerHTML = `<div class="card">${table([
       { label: 'รหัส', key: 'code' },
       { label: 'ชื่อสวน', render: (s) => `<b>${esc(s.name)}</b>${s.active ? '' : ' <span class="badge b-gray">ปิดใช้งาน</span>'}<div class="small muted">${esc(s.contact || '')}</div>` },
       { label: 'โทรศัพท์', render: (s) => esc(s.phone || '—') }, { label: 'จังหวัด', render: (s) => esc(s.province || '—') },
@@ -14,9 +26,7 @@ export async function render(el, ctx) {
       { label: 'รับแล้ว', right: true, render: (s) => `${fmtN(s.received_kg)} กก.<div class="small muted">${s.receipts} ครั้ง</div>` }, { label: 'รับล่าสุด', render: (s) => thDate(s.last_received) },
     ], rows, { rowAttr: (s) => `class="click" data-id="${s.id}"`, empty: 'ยังไม่มีสวน' })}</div>
     <div class="foot-note"><b>ประเมินสวน</b> กดชื่อสวนเพื่อดูอัตราคัดออก/เน่าเสีย ใช้ตัดสินใจว่าควรซื้อจากสวนไหนต่อ</div>`;
-  const a = $('#add', el); if (a) a.onclick = () => supplierForm(ctx);
-  const r = $('#rc', el); if (r) r.onclick = () => receiptForm(ctx);
-  $$('[data-id]', el).forEach((tr) => (tr.onclick = () => view(ctx, Number(tr.dataset.id))));
+  $$('[data-id]', body).forEach((tr) => (tr.onclick = () => view(ctx, Number(tr.dataset.id))));
 }
 
 async function view(ctx, id) {

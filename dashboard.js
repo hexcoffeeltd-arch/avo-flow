@@ -19,6 +19,8 @@ export async function render(el, ctx) {
   const pending = d.queue.filter((q) => q.key !== 'to_bill').reduce((a, q) => a + q.count, 0);
   const partial = d.queue.find((q) => q.key === 'partial')?.count || 0;
   const ripTotal = RIP_ORDER.reduce((a, k) => a + Number(d.by_ripeness[k] || 0), 0);
+  const pos = (v) => Math.max(0, Number(v || 0)); const ripPos = RIP_ORDER.reduce((a, k) => a + pos(d.by_ripeness[k]), 0);   // แถบกราฟไม่ติดลบ (ยอดติดลบแสดงเป็นตัวเลข)
+  const negN = alerts.filter((a) => a.kind === 'negative_stock').length;
   const zoneKg = (z) => (br?.zones?.[z] || []).reduce((a, r) => a + Number(r.kg), 0);
   const zoneUnits = (z, k) => (br?.zones?.[z] || []).reduce((a, r) => a + Number(r[k]), 0);
 
@@ -32,7 +34,7 @@ export async function render(el, ctx) {
     <div class="card kpi"><div class="label">แช่แข็ง</div><div class="value num">${fmtN(zoneUnits('frozen', 'bags'))} <small>ถุง</small></div><div class="foot">${fmtN(zoneKg('frozen'))} กก.</div></div>
     <div class="card kpi ${br.incoming.length ? 'warn' : ''}"><div class="label">รอยืนยันรับ</div><div class="value num">${br.incoming.length} <small>ใบ</small></div><div class="foot">รออนุมัติ ${br.pending_adjustments} รายการ</div></div>`
   : `
-    <div class="card kpi"><div class="label">สต็อกในคลัง</div><div class="value num">${fmtN(d.warehouse_kg)} <small>กก.</small></div><div class="foot">พร้อมจ่าย ${fmtN(d.ready_kg)} กก.${low.length ? ` · <span style="color:var(--warn-ink)">ใกล้หมด ${low.length} สายพันธุ์</span>` : ''}</div></div>
+    <div class="card kpi"><div class="label">สต็อกในคลัง</div><div class="value num">${fmtN(d.warehouse_kg)} <small>กก.</small></div><div class="foot">พร้อมจ่าย ${fmtN(d.ready_kg)} กก.${low.length ? ` · <span style="color:var(--warn-ink)">ใกล้หมด ${low.length} สายพันธุ์</span>` : ''}${negN ? ` · <a class="link" href="#/warehouse/stock/neg" style="color:var(--danger-ink)">ยอดติดลบ ${negN} Lot</a>` : ''}</div></div>
     <div class="card kpi"><div class="label">จำนวนตะกร้า</div><div class="value num">${fmtN(d.baskets)} <small>ตะกร้า</small></div><div class="foot">รวมทุกสายพันธุ์ · แช่แข็ง ${fmtN(d.frozen_bags)} ถุง</div></div>
     <div class="card kpi"><div class="label">สต็อกระหว่างทาง</div><div class="value num">${fmtN(d.transit_kg)} <small>กก.</small></div><div class="foot">รอสาขา/ลูกค้ายืนยันรับ</div></div>
     <div class="card kpi ${pending ? 'warn' : ''} click" id="kpi-tasks"><div class="label">งานรอตรวจสอบ</div><div class="value num">${pending} <small>รายการ</small></div><div class="foot">รับไม่ครบ ${partial} รายการ${d.overdue_tasks ? ` · <span style="color:var(--danger-ink)">เกินกำหนด ${d.overdue_tasks}</span>` : ''}</div></div>`}
@@ -42,10 +44,10 @@ export async function render(el, ctx) {
     <div class="card">${isBranch ? `
       <div class="card-head"><div><div class="card-title">สต็อกสาขาตามความสุก</div><div class="card-sub">หน้าร้าน + หลังร้าน · กิโลกรัม</div></div></div>
       <div class="bars">${RIP_ORDER.map((k) => { const kg = ['front', 'back'].reduce((a, z) => a + Number((br.zones[z] || []).find((r) => r.ripeness === k)?.kg || 0), 0); const tot = zoneKg('front') + zoneKg('back');
-        return `<div class="bar-row"><span>${RIP[k]}</span><div class="bar-track"><div class="bar-fill" style="width:${tot ? (kg / tot) * 100 : 0}%;background:${RIP_COLOR[k]}"></div></div><span class="right num">${fmtN(kg)}</span></div>`; }).join('')}</div>`
+        return `<div class="bar-row"><span>${RIP[k]}</span><div class="bar-track"><div class="bar-fill" style="width:${tot > 0 ? Math.min(100, (pos(kg) / tot) * 100) : 0}%;background:${RIP_COLOR[k]}"></div></div><span class="right num ${kg < 0 ? 'bad' : ''}">${fmtN(kg)}</span></div>`; }).join('')}</div>`
     : `
       <div class="card-head"><div><div class="card-title">สต็อกตามความสุก</div><div class="card-sub">รวมเฉพาะคลัง · กิโลกรัม</div></div><span class="small muted">รวม ${fmtN(ripTotal)} กก.</span></div>
-      <div class="bars">${RIP_ORDER.map((k) => `<div class="bar-row"><span>${RIP[k]}</span><div class="bar-track"><div class="bar-fill" style="width:${ripTotal ? (Number(d.by_ripeness[k] || 0) / ripTotal) * 100 : 0}%;background:${RIP_COLOR[k]}"></div></div><span class="right num">${fmtN(d.by_ripeness[k] || 0)}</span></div>`).join('')}</div>`}
+      <div class="bars">${RIP_ORDER.map((k) => `<div class="bar-row"><span>${RIP[k]}</span><div class="bar-track"><div class="bar-fill" style="width:${ripPos ? (pos(d.by_ripeness[k]) / ripPos) * 100 : 0}%;background:${RIP_COLOR[k]}"></div></div><span class="right num ${Number(d.by_ripeness[k] || 0) < 0 ? 'bad' : ''}">${fmtN(d.by_ripeness[k] || 0)}</span></div>`).join('')}</div>`}
       <div class="legend"><span><i></i>ค้นจาก Lot ได้</span><span>อัปเดตจากการตรวจจริง</span></div>
     </div>
     <div class="card"><div class="card-head"><div class="card-title">งานที่ต้องส่งต่อ</div><a class="link" href="#/tasks">คิวงาน · ผู้รับผิดชอบ →</a></div>

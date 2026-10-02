@@ -1,7 +1,7 @@
 // AVO FLOW service worker: ให้เปิดแอปได้ตอนไม่มีสัญญาณ และติดตั้งเป็นแอปบนมือถือได้
 // ไฟล์ของแอป: ใช้จากเน็ตก่อน (ได้รุ่นล่าสุดเสมอ) ถ้าออฟไลน์ใช้สำเนาในเครื่อง
 // ข้อมูลจากฐานข้อมูล (Neon/Supabase) ไม่ผ่าน service worker — จัดการในแอป (offline.js)
-const CACHE = 'avoflow-v2';
+const CACHE = 'avoflow-v5';
 const CDN = /(fonts\.googleapis\.com|fonts\.gstatic\.com|cdn\.jsdelivr\.net|cdnjs\.cloudflare\.com)$/;
 
 self.addEventListener('install', (e) => {

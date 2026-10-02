@@ -149,4 +149,41 @@ export async function seedDemo(call) {
   // ผู้บริหารมอบหมายงาน: ใบตีออก DC ให้ผู้จัดการคลังยืนยันภายใน 3 ชม.
   const whmRow = (await call(A, 'api_users', {})).find((u) => u.display_name === 'สมศักดิ์ (ผจก.คลัง)');
   await call(EX, 'api_assign', { entity: 'dispatch', id: dcDraft.id, assignee_id: whmRow.id, due_at: new Date(Date.now() + 3 * 3600e3).toISOString(), note: 'รถ DC มารับบ่ายนี้' });
+  // ---------- รุ่น 2.3: จัดซื้อ ----------
+  const ym = new Date(Date.now() + 7 * 3600e3).toISOString().slice(0, 7);
+  const dPlus = (n) => new Date(Date.now() + 7 * 3600e3 + n * 86400e3).toISOString().slice(0, 10);
+  await call(EX, 'api_budget_save', { month: ym, amount: 150000, note: 'งบซื้ออะโวคาโดเดือนนี้' });
+  const po1 = await call(WHM, 'api_po_save', { supplier_id: sup.noi, site_id: CW, expected_date: dPlus(2), note: 'รอบเก็บปลายเดือน', submit: true,
+    lines: [{ variety_id: V.HASS, size_id: S['220'], est_kg: 300, price: 48 }, { variety_id: V.HASS, size_id: S['180'], est_kg: 200, price: 44 }, { variety_id: V.HASS, size_id: null, est_kg: 100, price: 38 }] });
+  await call(EX, 'api_po_approve', { id: po1.id });
+  await call(WH, 'api_po_save', { supplier_id: sup.chai, site_id: CW, expected_date: dPlus(4), submit: true,
+    lines: [{ variety_id: V.BOOTH7, size_id: S.L, est_kg: 400, price: 35 }] });
+
+  // ---------- รุ่น 2.4: แผนจัดส่ง (ปฏิทิน) ----------
+  const br = {};
+  for (const [code, name, sort] of [['WSW', 'สาขา WSW', 3], ['RCD', 'สาขา RCD', 4], ['BN', 'สาขา BN', 5], ['AST', 'สาขา AST', 6]])
+    br[code] = (await call(A, 'api_master_save', { entity: 'site', row: { code, name, kind: 'branch', sort } })).id;
+  const pm = await call(WHM, 'api_plan_month', {});
+  const dest = Object.fromEntries(pm.dests.filter((d) => d.site_id).map((d) => [d.code, d.id]));
+  dest.DC = (await call(WHM, 'api_plan_dest_save', { customer_id: cust.dc })).id;
+  const plan = (date, code, kg, bk, note = null) => call(WHM, 'api_plan_save', { plan_date: date, dest_id: dest[code], planned_kg: kg, planned_baskets: bk, note });
+  // แผนที่ผ่านมา: ส่งครบแล้ว 2 ปลายทาง · ลืมส่ง 1 ปลายทาง (ขึ้น "มีปัญหา")
+  for (const [code, n, kg, bk] of [['WSW', 2, 30, 2], ['RCD', 1, 25, 2]]) {
+    await plan(dPlus(-n), code, kg, bk);
+    let d = await call(WH, 'api_dispatch_save', { kind: 'transfer', from_site_id: CW, to_site_id: br[code], doc_date: dPlus(-n), carrier: 'รถบริษัท', lines: [{ lot_id: L4, ripeness: 'breaking', kg, baskets: bk }] });
+    d = await call(WHM, 'api_dispatch_ship', { id: d.id });
+    await call(A, 'api_dispatch_receive', { id: d.id, receiver_name: 'หัวหน้าสาขา ' + code, evidence: ev1 });
+  }
+  await plan(dPlus(-1), 'BN', 20, 2, 'รอบเย็น');
+  // วันนี้: NWW (มีใบตีออกแล้ว) · DC (ใบร่างกำลังจัดของ) · AST (ยังไม่ตีออก)
+  await plan(dPlus(0), 'NWW', 100, 5);
+  await plan(dPlus(0), 'DC', 180, 9, 'รถห้องเย็น DC มารับ 14:00');
+  await plan(dPlus(0), 'AST', 60, 4);
+  // ล่วงหน้า 2 สัปดาห์ ตามรอบส่งประจำ
+  const wk = { 1: [['NWW', 100, 15], ['WSW', 100, 15]], 2: [['RCD', 100, 15], ['BN', 100, 15], ['DC', 200, 20]], 3: [['AST', 134, 16]],
+    4: [['NWW', 100, 15], ['WSW', 106, 15]], 5: [['CNX', 54, 6], ['DC', 200, 20]] };
+  for (let n = 1; n <= 13; n++) {
+    const day = dPlus(n); const w = new Date(day + 'T00:00:00Z').getUTCDay();
+    for (const [code, kg, bk] of wk[w] || []) await plan(day, code, kg, bk);
+  }
 }

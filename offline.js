@@ -6,8 +6,8 @@
 //  2) ข้อมูลที่เปิดดูล่าสุด (สต็อก แดชบอร์ด ฯลฯ) เก็บสำเนาไว้ เปิดดูได้ตอนออฟไลน์
 // =====================================================================
 export const QUEUE_FNS = new Set(['api_ripeness_change', 'api_adjust_request', 'api_reweigh', 'api_stocktake_save', 'api_zone_transfer', 'api_dispatch_receive', 'api_receipt_save']);
-const READ_FNS = new Set(['api_me', 'api_stock', 'api_dashboard', 'api_alerts', 'api_branch_stock', 'api_fefo', 'api_tasks', 'api_assignees',
-  'api_stocktakes', 'api_stocktake_get', 'api_dispatches', 'api_dispatch_get', 'api_receipts', 'api_receipt_get', 'api_lot_trace', 'api_adjustments', 'api_cases']);
+const READ_FNS = new Set(['api_me', 'api_stock', 'api_dashboard', 'api_alerts', 'api_branch_stock', 'api_fefo', 'api_dispatch_lots', 'api_tasks', 'api_assignees',
+  'api_stocktakes', 'api_stocktake_get', 'api_dispatches', 'api_dispatch_get', 'api_receipts', 'api_receipt_get', 'api_lot_trace', 'api_adjustments', 'api_cases', 'api_plan_month']);
 const OUTBOX = 'avoflow-outbox';
 const CACHE = 'avoflow-cache';
 

@@ -9,7 +9,7 @@ export async function render(el, ctx) {
   const order = { danger: 0, warn: 1, info: 2 };
   a.sort((x, y) => order[x.level] - order[y.level]);
   const t = ctx.master.settings?.thresholds || {};
-  el.innerHTML = `<div class="page-head"><div><h1>แจ้งเตือนและงานรอตรวจ</h1><div class="sub">สต็อกต่ำ ใกล้สุก สุกมาก ค้างคลัง น้ำหนักไม่ตรง และรายการรอรับ/รอตรวจสอบ · กดรายการเพื่อจัดการ</div></div>
+  el.innerHTML = `<div class="page-head"><div><h1>แจ้งเตือนและงานรอตรวจ</h1><div class="sub">ยอด Lot ติดลบ สต็อกต่ำ ใกล้สุก สุกมาก ค้างคลัง น้ำหนักไม่ตรง และรายการรอรับ/รอตรวจสอบ · กดรายการเพื่อจัดการ</div></div>
     ${ctx.can.settings ? '<div class="actions"><a class="btn" href="#/settings/general">ตั้งเกณฑ์แจ้งเตือน</a></div>' : ''}</div>
     <div class="card">${table([
       { label: 'ระดับ', render: (x) => `<span class="badge ${LV[x.level][0]}">${LV[x.level][1]}</span>` },
@@ -26,7 +26,10 @@ export async function render(el, ctx) {
     else if (x.return_id) returnView(ctx, x.return_id);
     else if (x.stocktake_id) stocktakeView(ctx, x.stocktake_id);
     else if (x.task_entity) openTask(ctx, { entity: x.task_entity, entity_id: x.task_id });
+    else if (x.kind === 'negative_stock') ctx.go('warehouse/stock/neg');
     else if (x.lot_id) lotTrace(ctx, x.lot_id);
     else if (x.kind === 'low_stock') ctx.go('warehouse');
+    else if (x.po_id) import('./purchase.js').then((mod) => mod.poView(ctx, x.po_id));
+    else if (x.kind === 'budget_over') ctx.go('suppliers/budget');
   }));
 }
